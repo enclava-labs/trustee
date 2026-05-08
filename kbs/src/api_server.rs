@@ -308,13 +308,8 @@ pub(crate) async fn api(
     };
 
     let query = query.into_inner();
-    let policy_data = json!(
-        {
-            "plugin": plugin,
-            "resource-path":resource_path,
-            "query": query,
-        }
-    );
+    let policy_data =
+        build_plugin_policy_data(request.method().as_str(), plugin, resource_path, &query);
 
     let policy_data_str = policy_data.to_string();
     match plugin {
@@ -535,6 +530,20 @@ pub(crate) async fn api(
             }
         }
     }
+}
+
+fn build_plugin_policy_data(
+    method: &str,
+    plugin: &str,
+    resource_path: &[&str],
+    query: &HashMap<String, String>,
+) -> serde_json::Value {
+    json!({
+        "plugin": plugin,
+        "resource-path": resource_path,
+        "query": query,
+        "method": method,
+    })
 }
 
 /// Build method-aware policy data for workload-resource endpoint.
@@ -1088,6 +1097,30 @@ mod workload_resource_tests {
 
         // query must be an empty object
         assert!(policy_data["query"].is_object(), "query must be an object");
+    }
+
+    #[test]
+    fn test_plugin_policy_data_includes_http_method() {
+        let mut query = HashMap::new();
+        query.insert(
+            "resource_path".to_string(),
+            "default/test-owner/seed-encrypted".to_string(),
+        );
+
+        let policy_data = build_plugin_policy_data(
+            "GET",
+            "resource",
+            &["default", "test-owner", "seed-encrypted"],
+            &query,
+        );
+
+        assert_eq!(policy_data["plugin"], "resource");
+        assert_eq!(policy_data["method"], "GET");
+        assert_eq!(policy_data["resource-path"][0], "default");
+        assert_eq!(
+            policy_data["query"]["resource_path"],
+            "default/test-owner/seed-encrypted"
+        );
     }
 
     #[test]
