@@ -24,6 +24,12 @@ fn plugin_internal_error_is_not_found(source: &anyhow::Error) -> bool {
 
 #[derive(Error, AsRefStr, Debug)]
 pub enum Error {
+    #[error("Attestation verify caller authentication is required")]
+    AttestationVerifyAuthRequired,
+
+    #[error("Attestation verify caller authentication failed")]
+    AttestationVerifyAuthInvalid,
+
     #[error("Admin auth error: {0}")]
     AdminAuth(#[from] crate::admin::Error),
 

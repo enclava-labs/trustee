@@ -2,7 +2,10 @@
 // Licensed under the Apache License, Version 2.0, see LICENSE for details.
 // SPDX-License-Identifier: Apache-2.0
 
-use std::sync::{Arc, LazyLock};
+use std::{
+    fmt,
+    sync::{Arc, LazyLock},
+};
 
 use actix_web::{HttpRequest, HttpResponse};
 use anyhow::{anyhow, bail, Context};
@@ -48,10 +51,24 @@ static VERSION_REQ: LazyLock<VersionReq> = LazyLock::new(|| {
 pub type TeeEvidence = serde_json::Value;
 
 /// IndependentEvidence is one set of evidence from one attester.
+pub enum EvidenceRuntimeData {
+    Structured(serde_json::Value),
+    Raw(Vec<u8>),
+}
+
+impl fmt::Display for EvidenceRuntimeData {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Structured(value) => write!(f, "{value}"),
+            Self::Raw(bytes) => write!(f, "{}", String::from_utf8_lossy(bytes)),
+        }
+    }
+}
+
 pub struct IndependentEvidence {
     pub tee: Tee,
     pub tee_evidence: TeeEvidence,
-    pub runtime_data: serde_json::Value,
+    pub runtime_data: EvidenceRuntimeData,
     pub init_data: Option<InitData>,
 }
 
@@ -258,6 +275,13 @@ impl AttestationService {
             .map_err(|e| Error::RcarAttestFailed { source: e })
     }
 
+    pub async fn verify_independent_evidence(
+        &self,
+        evidence_to_verify: Vec<IndependentEvidence>,
+    ) -> anyhow::Result<String> {
+        self.inner.verify(evidence_to_verify).await
+    }
+
     async fn __attest(
         &self,
         attestation: &[u8],
@@ -336,7 +360,7 @@ impl AttestationService {
         let mut primary_evidence = IndependentEvidence {
             tee,
             tee_evidence: attestation.tee_evidence.primary_evidence,
-            runtime_data: primary_runtime_data,
+            runtime_data: EvidenceRuntimeData::Structured(primary_runtime_data),
             init_data: None,
         };
 
@@ -356,7 +380,9 @@ impl AttestationService {
                 evidence_to_verify.push(IndependentEvidence {
                     tee,
                     tee_evidence,
-                    runtime_data: kbs_evidence_runtime_data.clone(),
+                    runtime_data: EvidenceRuntimeData::Structured(
+                        kbs_evidence_runtime_data.clone(),
+                    ),
                     init_data: None,
                 });
             }

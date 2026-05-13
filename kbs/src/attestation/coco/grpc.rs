@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use tonic::transport::Channel;
 use tracing::info;
 
-use crate::attestation::backend::{make_nonce, Attest, IndependentEvidence};
+use crate::attestation::backend::{make_nonce, Attest, EvidenceRuntimeData, IndependentEvidence};
 
 use self::attestation::{
     attestation_service_client::AttestationServiceClient,
@@ -106,13 +106,20 @@ impl Attest for GrpcClientPool {
                 .trim_start_matches('"')
                 .to_string();
 
+            let runtime_data = match evidence.runtime_data {
+                EvidenceRuntimeData::Structured(value) => {
+                    RuntimeData::StructuredRuntimeData(value.to_string())
+                }
+                EvidenceRuntimeData::Raw(bytes) => {
+                    RuntimeData::RawRuntimeData(URL_SAFE_NO_PAD.encode(bytes))
+                }
+            };
+
             let mut request = IndividualAttestationRequest {
                 tee,
                 evidence: URL_SAFE_NO_PAD.encode(evidence.tee_evidence.to_string()),
                 runtime_data_hash_algorithm: COCO_AS_HASH_ALGORITHM.into(),
-                runtime_data: Some(RuntimeData::StructuredRuntimeData(
-                    evidence.runtime_data.to_string(),
-                )),
+                runtime_data: Some(runtime_data),
                 init_data: None,
             };
 

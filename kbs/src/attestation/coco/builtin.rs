@@ -13,7 +13,7 @@ use key_value_storage::StorageBackendConfig;
 use serde::Deserialize;
 use tokio::sync::RwLock;
 
-use crate::attestation::backend::{make_nonce, Attest, IndependentEvidence};
+use crate::attestation::backend::{make_nonce, Attest, EvidenceRuntimeData, IndependentEvidence};
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Default)]
 pub struct Config {
@@ -65,7 +65,10 @@ impl Attest for BuiltInCoCoAs {
             let mut request = VerificationRequest {
                 evidence: evidence.tee_evidence,
                 tee: evidence.tee,
-                runtime_data: Some(RuntimeData::Structured(evidence.runtime_data)),
+                runtime_data: Some(match evidence.runtime_data {
+                    EvidenceRuntimeData::Structured(value) => RuntimeData::Structured(value),
+                    EvidenceRuntimeData::Raw(bytes) => RuntimeData::Raw(bytes),
+                }),
                 runtime_data_hash_algorithm: HashAlgorithm::Sha384,
                 init_data: None,
             };

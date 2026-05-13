@@ -4,6 +4,8 @@ FROM --platform=${BUILDPLATFORM:-linux/amd64} \
     AS builder
 ARG ARCH=x86_64
 ARG ALIYUN=false
+ARG AS_FEATURE=coco-as-builtin
+ARG FEATURES=pkcs11
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -44,7 +46,7 @@ RUN if [ "${ARCH}" = "x86_64" ]; then curl -fsSL https://download.01.org/intel-s
 WORKDIR /usr/src/trustee
 COPY . .
 
-RUN cd kbs && make AS_FEATURE=coco-as-builtin FEATURES=pkcs11 ALIYUN=${ALIYUN} ARCH=${ARCH} && \
+RUN cd kbs && make AS_FEATURE=${AS_FEATURE} FEATURES=${FEATURES} ALIYUN=${ALIYUN} ARCH=${ARCH} && \
     make ARCH=${ARCH} install-kbs
 
 # ubuntu:24.04
