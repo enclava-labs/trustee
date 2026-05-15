@@ -18,33 +18,13 @@ jobs:
             instance: ubuntu-24.04
             dockerfile: kbs/docker/kbs-client/Dockerfile
             output_path: kbs-client
-            repo: ghcr.io/confidential-containers/staged-images/kbs-client
-          - component: kbs-client
-            instance: ubuntu-24.04-s390x
-            dockerfile: kbs/docker/kbs-client/Dockerfile
-            output_path: kbs-client
-            repo: ghcr.io/confidential-containers/staged-images/kbs-client
-          - component: kbs-client
-            instance: ubuntu-24.04-arm
-            dockerfile: kbs/docker/kbs-client/Dockerfile
-            output_path: kbs-client
-            repo: ghcr.io/confidential-containers/staged-images/kbs-client
+            repo: ghcr.io/enclava-ai/kbs-client
           # trustee-cli
           - component: trustee-cli
             instance: ubuntu-24.04
             dockerfile: tools/trustee-cli/Dockerfile
             output_path: ./usr/local/bin/trustee
-            repo: ghcr.io/confidential-containers/staged-images/trustee-cli
-          - component: trustee-cli
-            instance: ubuntu-24.04-s390x
-            dockerfile: tools/trustee-cli/Dockerfile
-            output_path: ./usr/local/bin/trustee
-            repo: ghcr.io/confidential-containers/staged-images/trustee-cli
-          - component: trustee-cli
-            instance: ubuntu-24.04-arm
-            dockerfile: tools/trustee-cli/Dockerfile
-            output_path: ./usr/local/bin/trustee
-            repo: ghcr.io/confidential-containers/staged-images/trustee-cli
+            repo: ghcr.io/enclava-ai/trustee-cli
     runs-on: ${{ matrix.instance }}
     permissions:
       contents: read

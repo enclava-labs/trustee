@@ -23,9 +23,9 @@ jobs:
           - instance: ubuntu-24.04
             test_features: "pkcs11"
           - instance: ubuntu-24.04-arm
-            test_features: "coco-as-builtin,coco-as-grpc,intel-trust-authority-as,cca-attester,pkcs11"
+            test_features: "coco-as-builtin,coco-as-grpc,cca-attester,pkcs11"
           - instance: s390x-large
-            test_features: "coco-as-builtin,coco-as-grpc,intel-trust-authority-as,pkcs11"
+            test_features: "coco-as-builtin,coco-as-grpc,pkcs11"
     runs-on: ${{ matrix.instance }}
     permissions:
       contents: read
@@ -113,7 +113,6 @@ jobs:
       matrix:
         include:
           - instance: ubuntu-24.04
-          - instance: ubuntu-24.04-arm
     runs-on: ${{ matrix.instance }}
     permissions:
       contents: read
@@ -142,4 +141,3 @@ jobs:
 
       - name: Run trustee CLI lint/format/test
         run: make test-trustee-cli-unit
-

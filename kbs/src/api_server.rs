@@ -14,6 +14,7 @@ use actix_web::{
 use anyhow::Context;
 use base64::Engine;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+#[cfg(feature = "as")]
 use kbs_types::Tee;
 use policy_engine::{rego::Regorus, PolicyEngine};
 use serde_json::json;
@@ -600,6 +601,7 @@ struct WorkloadRequestBody {
     operation: String,
     receipt: Option<WorkloadReceipt>,
     value: Option<String>,
+    #[cfg(feature = "as")]
     receipt_attestation: Option<WorkloadReceiptAttestation>,
 }
 
@@ -610,6 +612,7 @@ struct WorkloadReceipt {
     signature: String,
 }
 
+#[cfg(feature = "as")]
 #[derive(Debug, serde::Deserialize)]
 struct WorkloadReceiptAttestation {
     tee: Tee,
@@ -641,8 +644,10 @@ fn workload_request_body_policy_input(
 }
 
 struct ParsedWorkloadRequestBody {
+    #[cfg(feature = "as")]
     parsed: WorkloadRequestBody,
     policy_body: serde_json::Value,
+    #[cfg(feature = "as")]
     receipt_pubkey_sha256: Option<[u8; 32]>,
 }
 
@@ -659,7 +664,7 @@ fn parse_workload_request_body_verified(
     });
 
     let mut value_hash_matches = false;
-    let mut receipt_pubkey_sha256 = None;
+    let mut _receipt_pubkey_sha256 = None;
     if let Some(receipt) = parsed.receipt.as_ref() {
         let pubkey = policy_artifact::decode_bytes(&receipt.pubkey)?;
         let payload = policy_artifact::decode_bytes(&receipt.payload_canonical_bytes)?;
@@ -673,7 +678,7 @@ fn parse_workload_request_body_verified(
             .unwrap_or(false);
         let signature_valid = verify_ed25519(&pubkey, &payload, &signature);
         let payload_fields = receipt_payload_policy_fields(&payload)?;
-        receipt_pubkey_sha256 = Some(actual_pubkey_sha256);
+        _receipt_pubkey_sha256 = Some(actual_pubkey_sha256);
 
         if let (Some(value), Some(expected_hash)) = (
             parsed.value.as_deref(),
@@ -702,9 +707,11 @@ fn parse_workload_request_body_verified(
     });
 
     Ok(ParsedWorkloadRequestBody {
+        #[cfg(feature = "as")]
         parsed,
         policy_body,
-        receipt_pubkey_sha256,
+        #[cfg(feature = "as")]
+        receipt_pubkey_sha256: _receipt_pubkey_sha256,
     })
 }
 
@@ -1091,19 +1098,29 @@ pub(crate) async fn workload_resource_api(
     let claims = core.token_verifier.verify(token).await?;
     let claim_str = serde_json::to_string(&claims)?;
 
-    let mut attested_receipt_pubkey_sha256 = None;
-    if let Ok(parsed_body) = parse_workload_request_body_verified(&body, &claims, None) {
+    let attested_receipt_pubkey_sha256 = {
         #[cfg(feature = "as")]
-        if parsed_body.policy_body["receipt"]["pubkey_hash_matches"].as_bool() != Some(true) {
-            if let (Some(receipt_hash), Some(proof)) = (
-                parsed_body.receipt_pubkey_sha256,
-                parsed_body.parsed.receipt_attestation.as_ref(),
-            ) {
-                attested_receipt_pubkey_sha256 =
-                    attested_receipt_pubkey_hash(&core, receipt_hash, proof).await;
+        {
+            let mut attested_receipt_pubkey_sha256 = None;
+            if let Ok(parsed_body) = parse_workload_request_body_verified(&body, &claims, None) {
+                if parsed_body.policy_body["receipt"]["pubkey_hash_matches"].as_bool() != Some(true)
+                {
+                    if let (Some(receipt_hash), Some(proof)) = (
+                        parsed_body.receipt_pubkey_sha256,
+                        parsed_body.parsed.receipt_attestation.as_ref(),
+                    ) {
+                        attested_receipt_pubkey_sha256 =
+                            attested_receipt_pubkey_hash(&core, receipt_hash, proof).await;
+                    }
+                }
             }
+            attested_receipt_pubkey_sha256
         }
-    }
+        #[cfg(not(feature = "as"))]
+        {
+            None
+        }
+    };
 
     // Construct method-aware policy data
     let policy_data = build_workload_policy_data_with_attested_receipt(
