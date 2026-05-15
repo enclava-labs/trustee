@@ -561,6 +561,7 @@ pub(crate) fn build_workload_policy_data(method: &str, path_parts: &[&str]) -> s
     build_workload_policy_data_with_body(method, path_parts, &[], &serde_json::Value::Null)
 }
 
+#[cfg(test)]
 pub(crate) fn build_workload_policy_data_with_body(
     method: &str,
     path_parts: &[&str],
@@ -637,13 +638,6 @@ fn workload_request_body_policy_input(
             "value_hash_matches": false,
         }),
     }
-}
-
-fn parse_workload_request_body(
-    body: &[u8],
-    claims: &serde_json::Value,
-) -> anyhow::Result<serde_json::Value> {
-    Ok(parse_workload_request_body_verified(body, claims, None)?.policy_body)
 }
 
 struct ParsedWorkloadRequestBody {
