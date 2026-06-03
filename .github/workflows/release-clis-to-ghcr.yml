@@ -18,13 +18,13 @@ jobs:
             instance: ubuntu-24.04
             dockerfile: kbs/docker/kbs-client/Dockerfile
             output_path: kbs-client
-            repo: ghcr.io/enclava-ai/kbs-client
+            repo: ghcr.io/enclava-labs/kbs-client
           # trustee-cli
           - component: trustee-cli
             instance: ubuntu-24.04
             dockerfile: tools/trustee-cli/Dockerfile
             output_path: ./usr/local/bin/trustee
-            repo: ghcr.io/enclava-ai/trustee-cli
+            repo: ghcr.io/enclava-labs/trustee-cli
     runs-on: ${{ matrix.instance }}
     permissions:
       contents: read

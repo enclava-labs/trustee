@@ -4,9 +4,16 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version_tag:
+        description: "Optional additional image tag to publish, for example v0.1.0-enclava.1"
+        required: false
+        type: string
 
 permissions:
   contents: read
+  id-token: write
   packages: write
 
 jobs:
@@ -30,8 +37,12 @@ jobs:
 
       - name: Determine image tag
         id: tag
+        env:
+          VERSION_TAG: ${{ github.event.inputs.version_tag }}
         run: |
-          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+          if [ -n "${VERSION_TAG}" ]; then
+            echo "tag=${VERSION_TAG}" >> "$GITHUB_OUTPUT"
+          elif [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
           else
             echo "tag=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
@@ -45,6 +56,20 @@ jobs:
             --build-arg BUILDPLATFORM=linux/amd64 \
             --build-arg ARCH=x86_64 \
             --push \
-            -t ghcr.io/enclava-ai/trustee-kbs-grpc-as:${{ steps.tag.outputs.tag }} \
-            -t ghcr.io/enclava-ai/trustee-kbs-grpc-as:latest \
+            --metadata-file /tmp/kbs-image-metadata.json \
+            -t ghcr.io/enclava-labs/trustee-kbs-grpc-as:${{ steps.tag.outputs.tag }} \
+            -t ghcr.io/enclava-labs/trustee-kbs-grpc-as:latest \
             .
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159 # v3.9.2
+
+      - name: Sign pushed digest
+        run: |
+          digest="$(jq -r '."containerimage.digest"' /tmp/kbs-image-metadata.json)"
+          if [ -z "${digest}" ] || [ "${digest}" = "null" ]; then
+            echo "containerimage.digest missing from build metadata"
+            cat /tmp/kbs-image-metadata.json
+            exit 1
+          fi
+          cosign sign --yes "ghcr.io/enclava-labs/trustee-kbs-grpc-as@${digest}"
