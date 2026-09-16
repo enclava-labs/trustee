@@ -32,7 +32,7 @@ belongs to the migration operator. Protect database traffic, storage and backups
 as security-sensitive data. The existing PostgreSQL configuration and
 `POSTGRES_URL` are reused; deployments requiring distinct session and durable
 resource/policy credentials need separate connection wiring before enabling HA.
-No connection URL is logged by the PostgreSQL backend.
+Use `POSTGRES_URL` when a password is required: the inherited structured-password URL construction has a separate known limitation. No connection URL is logged by the PostgreSQL backend.
 
 `Memory` and `Postgres` are the only supported session backends. LocalJson and
 LocalFs are rejected because their storage implementations do not offer the
@@ -45,7 +45,7 @@ with no fallback to an empty in-memory store.
 Sessions have a versioned serialization containing the challenge, immutable
 expiry and, after successful verification, the attestation token plus a request
 fingerprint. Unknown versions and malformed records fail closed; clients must
-start a new handshake. Expired sessions are denied and periodically removed.
+start a new handshake. Expired sessions are denied immediately and periodically removed after a 60-second garbage-collection grace period for clock skew. Keep replica clocks synchronized. Undecodable rows are retained with a warning so a rollback cannot delete a newer version's sessions; migration operators must clean obsolete formats after all readers are retired.
 
 Completion uses compare-and-swap against the entire prior database row.
 Concurrent identical requests receive the committed winner's token. Concurrent

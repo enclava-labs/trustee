@@ -50,7 +50,7 @@ jobs:
 
       - name: Building dependencies installation
         run: |
-          sudo apt-get update && sudo apt-get install -y protobuf-compiler libprotobuf-dev libtss2-dev
+          sudo apt-get update && sudo apt-get install -y protobuf-compiler libprotobuf-dev libtss2-dev postgresql-client
 
       - name: Install TDX dependencies
         if: ${{ matrix.instance == 'ubuntu-24.04' }}

@@ -10,12 +10,6 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Error, AsRefStr, Debug)]
 pub enum Error {
-    #[error("Session storage error: {source}")]
-    SessionStorageError {
-        #[source]
-        source: anyhow::Error,
-    },
-
     #[error("Failed to initialize session storage")]
     SessionStorageInitialization {
         #[source]

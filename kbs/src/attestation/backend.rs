@@ -216,6 +216,7 @@ impl AttestationService {
             }
         };
 
+        info!(backend = ?session_storage_backend_type, "KBS session storage backend");
         let session_storage_backend = storage_backend_config
             .backends
             .to_client_with_namespace(*session_storage_backend_type, KBS_SESSION_STORAGE_NAMESPACE)
@@ -358,12 +359,18 @@ impl AttestationService {
             .inspect_err(|_| ATTESTATION_ERRORS.inc())
             .context("deserialize Attestation")?;
         let fingerprint = super::session::request_fingerprint(&attestation)?;
-        let session = self
+        let snapshot = self
             .session_map
             .get(session_id)
-            .await?
-            .context("session not found")?;
-        if let Some(token) = session.completed_token(&fingerprint)? {
+            .await
+            .inspect_err(|_| ATTESTATION_ERRORS.inc())?
+            .context("session not found")
+            .inspect_err(|_| ATTESTATION_ERRORS.inc())?;
+        let session = &snapshot.status;
+        if let Some(token) = session
+            .completed_token(&fingerprint)
+            .inspect_err(|_| ATTESTATION_ERRORS.inc())?
+        {
             return Ok(HttpResponse::Ok()
                 .cookie(session.cookie())
                 .json(json!({ "token": token })));
@@ -451,8 +458,9 @@ impl AttestationService {
 
         let completed = self
             .session_map
-            .complete(&session, &fingerprint, token)
-            .await?;
+            .complete(&snapshot, &fingerprint, token)
+            .await
+            .inspect_err(|_| ATTESTATION_ERRORS.inc())?;
         let token = completed
             .completed_token(&fingerprint)?
             .context("session not completed")?;
@@ -473,11 +481,10 @@ impl AttestationService {
             .session_map
             .get(cookie.value())
             .await
-            .inspect_err(|_| ATTESTATION_ERRORS.inc())
             .context("Failed to get session")?
-            .ok_or(anyhow!("session not found"))
-            .inspect_err(|_| ATTESTATION_ERRORS.inc())?;
+            .ok_or(anyhow!("session not found"))?;
 
+        let session = session.status;
         info!("Cookie {} request to get resource", session.id());
 
         if session.is_expired() {

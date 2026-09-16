@@ -202,7 +202,9 @@ impl ApiServer {
         #[cfg(feature = "as")]
         let attestation_service = crate::attestation::AttestationService::new(
             config.attestation_service.clone(),
-            &config.session_storage_type.unwrap_or_default(),
+            &config
+                .session_storage_type
+                .unwrap_or(key_value_storage::KeyValueStorageType::Memory),
             &config.storage_backend,
         )
         .await?;

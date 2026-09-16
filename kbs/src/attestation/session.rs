@@ -13,6 +13,7 @@ use kbs_types::{Challenge, Request};
 use key_value_storage::{KeyValueStorage, SetParameters, SetResult};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use tracing::warn;
 use uuid::Uuid;
 
 pub(crate) static KBS_SESSION_ID: &str = "kbs-session-id";
@@ -126,6 +127,12 @@ pub fn request_fingerprint(request: &kbs_types::Attestation) -> Result<String> {
     Ok(hex::encode(Sha256::digest(serde_json::to_vec(&value)?)))
 }
 
+#[derive(Debug)]
+pub(crate) struct SessionSnapshot {
+    pub status: SessionStatus,
+    bytes: Vec<u8>,
+}
+
 #[derive(Clone)]
 pub(crate) struct SessionMap {
     pub storage: Arc<dyn KeyValueStorage>,
@@ -153,32 +160,32 @@ impl SessionMap {
         Ok(())
     }
 
-    pub async fn get(&self, session_id: &str) -> Result<Option<SessionStatus>> {
+    pub async fn get(&self, session_id: &str) -> Result<Option<SessionSnapshot>> {
         let Some(bytes) = self.storage.get(session_id).await? else {
             return Ok(None);
         };
         let session = decode(&bytes)?;
         ensure!(session.id() == session_id, "session ID mismatch");
         if session.is_expired() {
-            // Expiry is immutable across completion, so this also safely removes
-            // a concurrent completion of the same expired handshake.
-            self.storage.delete(session_id).await?;
             return Ok(None);
         }
-        Ok(Some(session))
+        Ok(Some(SessionSnapshot {
+            status: session,
+            bytes,
+        }))
     }
 
     pub async fn complete(
         &self,
-        expected: &SessionStatus,
+        expected: &SessionSnapshot,
         fingerprint: &str,
         token: String,
     ) -> Result<SessionStatus> {
         ensure!(
-            !expected.is_expired(),
+            !expected.status.is_expired(),
             "session expired during verification"
         );
-        let SessionStatus::Authed { id, timeout, .. } = expected else {
+        let SessionStatus::Authed { id, timeout, .. } = &expected.status else {
             bail!("session already completed")
         };
         let completed = SessionStatus::Attested {
@@ -190,32 +197,42 @@ impl SessionMap {
         // Compare the entire prior record; update-if-present cannot prevent
         // concurrent attestations from overwriting each other's token/binding.
         self.storage
-            .compare_and_swap(id, &encode(expected)?, &encode(&completed)?)
+            .compare_and_swap(id, &expected.bytes, &encode(&completed)?)
             .await?;
         let winner = self
             .get(id)
             .await?
             .context("session disappeared or expired during completion")?;
         ensure!(
-            winner.completed_token(fingerprint)?.is_some(),
+            winner.status.completed_token(fingerprint)?.is_some(),
             "session changed during completion"
         );
-        Ok(winner)
+        Ok(winner.status)
     }
 
     pub async fn cleanup_expired(&self) -> Result<()> {
         // ponytail: full namespace scan, matching upstream; use indexed expiry
         // cleanup if measured session volume makes this sweep expensive.
+        let mut malformed = 0;
         for key in self.storage.list().await? {
             let Some(value) = self.storage.get(&key).await? else {
                 continue;
             };
             let Ok(session) = decode(&value) else {
+                malformed += 1;
                 continue;
             };
-            if session.is_expired() {
+            // Deny at expiry, but allow one minute of clock skew before a
+            // replica removes another replica's session. Expiry is immutable.
+            if *session.timeout() + Duration::seconds(60) < OffsetDateTime::now_utc() {
                 self.storage.delete(&key).await?;
             }
+        }
+        if malformed > 0 {
+            warn!(
+                malformed,
+                "undecodable session rows retained; check session format compatibility"
+            );
         }
         Ok(())
     }
@@ -248,7 +265,7 @@ mod tests {
 
         // The kbs_types::Challenge and kbs_types::Request does not handle PartialEq
         // so we need to compare the debugging string directly.
-        assert_eq!(format!("{session:?}"), format!("{session_get:?}"));
+        assert_eq!(format!("{session:?}"), format!("{:?}", session_get.status));
     }
     fn pending() -> SessionStatus {
         SessionStatus::auth(
@@ -269,10 +286,11 @@ mod tests {
         let initial = pending();
         a.insert(initial.clone()).await.unwrap();
         assert!(b.insert(initial.clone()).await.is_err());
+        let expected = a.get(initial.id()).await.unwrap().unwrap();
         let peer = b.get(initial.id()).await.unwrap().unwrap();
         // Both replicas begin with the same Authed record and produce distinct tokens.
         let (first, second) = tokio::join!(
-            a.complete(&initial, "same-evidence-and-key", "token-A".into()),
+            a.complete(&expected, "same-evidence-and-key", "token-A".into()),
             b.complete(&peer, "same-evidence-and-key", "token-B".into()),
         );
         let first = first.unwrap();
@@ -290,6 +308,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap()
+            .status
             .completed_token("other-evidence")
             .is_err());
         a.storage.delete(initial.id()).await.unwrap();
@@ -299,11 +318,28 @@ mod tests {
             .is_err());
         assert!(b.get(initial.id()).await.unwrap().is_none());
 
+        // A valid prior row need not match this binary's serialization: retain
+        // the bytes read from storage, including whitespace/unknown fields.
+        let prior = pending();
+        let mut encoded: serde_json::Value =
+            serde_json::from_slice(&encode(&prior).unwrap()).unwrap();
+        encoded["future_metadata"] = json!("ignored-by-v1");
+        let raw = serde_json::to_vec_pretty(&encoded).unwrap();
+        a.storage
+            .set(prior.id(), &raw, SetParameters::default())
+            .await
+            .unwrap();
+        let snapshot = b.get(prior.id()).await.unwrap().unwrap();
+        assert_ne!(snapshot.bytes, encode(&snapshot.status).unwrap());
+        b.complete(&snapshot, "fp", "token".into()).await.unwrap();
+        a.storage.delete(prior.id()).await.unwrap();
+
         let competing = pending();
         a.insert(competing.clone()).await.unwrap();
+        let competing_snapshot = a.get(competing.id()).await.unwrap().unwrap();
         let (first, second) = tokio::join!(
-            a.complete(&competing, "key-A", "token-A".into()),
-            b.complete(&competing, "key-B", "token-B".into()),
+            a.complete(&competing_snapshot, "key-A", "token-A".into()),
+            b.complete(&competing_snapshot, "key-B", "token-B".into()),
         );
         assert_ne!(first.is_ok(), second.is_ok());
         a.storage.delete(competing.id()).await.unwrap();
@@ -332,7 +368,17 @@ mod tests {
             .await
             .unwrap();
         assert!(map.get(session.id()).await.unwrap().is_none());
-        assert!(map.complete(&session, "fp", "token".into()).await.is_err());
+        assert!(map
+            .complete(
+                &SessionSnapshot {
+                    status: session.clone(),
+                    bytes: encode(&session).unwrap()
+                },
+                "fp",
+                "token".into()
+            )
+            .await
+            .is_err());
         for bytes in [
             b"not JSON".as_slice(),
             br#"{"version":"2","state":{}}"#.as_slice(),
@@ -352,12 +398,17 @@ mod tests {
             .await
             .unwrap();
         assert!(map.get("wrong-id").await.is_err());
-        let expired = session.clone();
+        map.cleanup_expired().await.unwrap();
+        assert!(storage.get(session.id()).await.unwrap().is_some());
+        let mut expired = session.clone();
+        if let SessionStatus::Authed { timeout, .. } = &mut expired {
+            *timeout -= Duration::seconds(60);
+        }
         storage
             .set(
                 expired.id(),
                 &encode(&expired).unwrap(),
-                SetParameters::default(),
+                SetParameters { overwrite: true },
             )
             .await
             .unwrap();

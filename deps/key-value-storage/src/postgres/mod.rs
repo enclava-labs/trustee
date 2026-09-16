@@ -190,6 +190,12 @@ impl KeyValueStorage for PostgresClient {
     }
 
     async fn compare_and_swap(&self, key: &str, expected: &[u8], value: &[u8]) -> Result<bool> {
+        if !is_valid_key(key) {
+            return Err(KeyValueStorageError::SetKeyFailed {
+                source: anyhow!("key contains invalid characters"),
+                key: key.to_string(),
+            });
+        }
         let sql = format!(
             "UPDATE {} SET {VALUE_COLUMN} = $3 WHERE {KEY_COLUMN} = $1 AND {VALUE_COLUMN} = $2",
             self.table
