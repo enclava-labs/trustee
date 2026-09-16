@@ -517,3 +517,8 @@ dir_path = "./work/storage"
 name = "resource"
 type = "kvstorage"
 ```
+
+## Shared protocol sessions
+
+See [shared sessions](shared-sessions.md) for the opt-in PostgreSQL session store,
+its schema, security behavior, and rollout prerequisites.

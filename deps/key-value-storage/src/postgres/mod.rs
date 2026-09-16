@@ -90,7 +90,7 @@ impl PostgresClient {
                 source: anyhow!("failed to parse PostgreSQL connection string: {e}"),
             })?
             .to_string();
-        info!("Connecting to PostgreSQL DB: {url}");
+        info!("Connecting to PostgreSQL storage");
 
         let pool = PgPoolOptions::new()
             .max_connections(MAX_CONNECTIONS)
@@ -187,6 +187,24 @@ impl KeyValueStorage for PostgresClient {
         }
 
         Ok(UpdateResult::Updated)
+    }
+
+    async fn compare_and_swap(&self, key: &str, expected: &[u8], value: &[u8]) -> Result<bool> {
+        let sql = format!(
+            "UPDATE {} SET {VALUE_COLUMN} = $3 WHERE {KEY_COLUMN} = $1 AND {VALUE_COLUMN} = $2",
+            self.table
+        );
+        let result = query(&sql)
+            .bind(key)
+            .bind(expected)
+            .bind(value)
+            .execute(&*self.pool)
+            .await
+            .map_err(|source| KeyValueStorageError::SetKeyFailed {
+                source: source.into(),
+                key: key.to_string(),
+            })?;
+        Ok(result.rows_affected() == 1)
     }
 
     #[instrument(skip_all, name = "PostgresClient::list")]

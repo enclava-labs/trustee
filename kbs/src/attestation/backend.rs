@@ -12,15 +12,15 @@ use anyhow::{anyhow, bail, Context};
 use async_trait::async_trait;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use kbs_types::{Attestation, Challenge, InitData, Request, Tee};
-use key_value_storage::StorageBackendConfig;
+use key_value_storage::{KeyValueStorageType, StorageBackendConfig};
 use rand::{thread_rng, Rng};
 use semver::{BuildMetadata, Prerelease, Version, VersionReq};
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::HashMap;
-use tracing::{debug, info};
+use tracing::{info, warn};
 
-use crate::attestation::session::KBS_SESSION_ID;
+use crate::attestation::session::{SessionMap, KBS_SESSION_ID};
 use crate::prometheus::{
     ATTESTATION_ERRORS, ATTESTATION_FAILURES, ATTESTATION_REQUESTS, ATTESTATION_SUCCESSES,
     AUTH_ERRORS, AUTH_REQUESTS, AUTH_SUCCESSES,
@@ -28,9 +28,11 @@ use crate::prometheus::{
 
 use super::{
     config::{AttestationConfig, AttestationServiceConfig},
-    session::{SessionMap, SessionStatus},
+    session::SessionStatus,
     Error, Result,
 };
+
+const KBS_SESSION_STORAGE_NAMESPACE: &str = "kbs_protocol_session";
 
 static KBS_MAJOR_VERSION: u64 = 0;
 static KBS_MINOR_VERSION: u64 = 4;
@@ -156,8 +158,8 @@ pub struct AttestationService {
     /// Attestation Module
     inner: Arc<dyn Attest>,
 
-    /// A concurrent safe map to keep status of RCAR status
-    session_map: Arc<SessionMap>,
+    /// A storage backend to keep session status of RCAR status
+    session_map: SessionMap,
 
     /// Maximum session expiration time.
     timeout: i64,
@@ -172,8 +174,19 @@ pub struct SetPolicyInput {
 impl AttestationService {
     pub async fn new(
         config: AttestationConfig,
-        _storage_backend_config: &StorageBackendConfig,
+        session_storage_backend_type: &KeyValueStorageType,
+        storage_backend_config: &StorageBackendConfig,
     ) -> Result<Self> {
+        if !matches!(
+            session_storage_backend_type,
+            KeyValueStorageType::Memory | KeyValueStorageType::Postgres
+        ) {
+            return Err(Error::SessionStorageInitialization {
+                source: key_value_storage::KeyValueStorageError::InvalidConfiguration {
+                    message: "sessions require Memory or Postgres with atomic completion".into(),
+                },
+            });
+        }
         let inner = match config.attestation_service {
             #[cfg(any(
                 feature = "coco-as-builtin",
@@ -182,7 +195,7 @@ impl AttestationService {
             ))]
             AttestationServiceConfig::CoCoASBuiltIn(cfg) => {
                 let built_in_as =
-                    super::coco::builtin::BuiltInCoCoAs::new(cfg, _storage_backend_config)
+                    super::coco::builtin::BuiltInCoCoAs::new(cfg, storage_backend_config)
                         .await
                         .map_err(|e| Error::AttestationServiceInitialization { source: e })?;
                 Arc::new(built_in_as) as _
@@ -203,20 +216,44 @@ impl AttestationService {
             }
         };
 
-        let session_map = Arc::new(SessionMap::new());
+        let session_storage_backend = storage_backend_config
+            .backends
+            .to_client_with_namespace(*session_storage_backend_type, KBS_SESSION_STORAGE_NAMESPACE)
+            .await
+            .map_err(|e| Error::SessionStorageInitialization { source: e })?;
 
-        tokio::spawn({
-            let session_map_clone = session_map.clone();
-            async move {
+        let session_map = SessionMap::new(session_storage_backend.clone());
+        // Start background cleanup of expired session records in the `kbs_protocol_session` namespace.
+        {
+            let cleanup_session_map = session_map.clone();
+            // Run periodic cleanup every minute when healthy.
+            let cleanup_interval = ::tokio::time::Duration::from_secs(60);
+            // Use exponential backoff on failures to avoid noisy retry loops during outages.
+            let cleanup_retry_initial_interval = ::tokio::time::Duration::from_secs(5);
+            let cleanup_retry_max_interval = ::tokio::time::Duration::from_secs(300);
+            ::tokio::spawn(async move {
+                let mut retry_interval = cleanup_retry_initial_interval;
                 loop {
-                    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-                    session_map_clone
-                        .sessions
-                        .retain_async(|_, v| !v.is_expired())
-                        .await;
+                    match cleanup_session_map.cleanup_expired().await {
+                        Ok(()) => {
+                            retry_interval = cleanup_retry_initial_interval;
+                            ::tokio::time::sleep(cleanup_interval).await;
+                        }
+                        Err(err) => {
+                            warn!(
+                                ?err,
+                                retry_secs = retry_interval.as_secs(),
+                                "failed to clean up expired session records"
+                            );
+                            ::tokio::time::sleep(retry_interval).await;
+                            retry_interval = retry_interval
+                                .saturating_mul(2)
+                                .min(cleanup_retry_max_interval);
+                        }
+                    }
                 }
-            }
-        });
+            });
+        }
         Ok(Self {
             inner,
             timeout: config.timeout,
@@ -271,11 +308,12 @@ impl AttestationService {
 
         AUTH_SUCCESSES.inc();
 
-        let response = HttpResponse::Ok()
-            .cookie(session.cookie())
-            .json(session.challenge());
+        let SessionStatus::Authed { challenge, .. } = &session else {
+            unreachable!("new session is Authed")
+        };
+        let response = HttpResponse::Ok().cookie(session.cookie()).json(challenge);
 
-        self.session_map.insert(session);
+        self.session_map.insert(session).await?;
 
         Ok(response)
     }
@@ -319,46 +357,27 @@ impl AttestationService {
         let attestation: Attestation = serde_json::from_slice(attestation)
             .inspect_err(|_| ATTESTATION_ERRORS.inc())
             .context("deserialize Attestation")?;
-        let (tee, nonce) = {
-            let session = self
-                .session_map
-                .sessions
-                .get_async(session_id)
-                .await
-                .ok_or(anyhow!("No cookie found"))
-                .inspect_err(|_| ATTESTATION_ERRORS.inc())?;
-            let session = session.get();
-
-            debug!("Session ID {}", session.id());
-
-            if session.is_expired() {
-                bail!("session expired.");
-            }
-
-            if let SessionStatus::Attested { token, .. } = session {
-                debug!(
-                    "Session {} is already attested. Skip attestation and return the old token",
-                    session.id()
-                );
-                let body = serde_json::to_string(&json!({
-                    "token": token,
-                }))
-                .inspect_err(|_| ATTESTATION_ERRORS.inc())
-                .context("Serialize token failed")?;
-
-                return Ok(HttpResponse::Ok()
-                    .cookie(session.cookie())
-                    .content_type("application/json")
-                    .body(body));
-            }
-
-            let attestation_str = serde_json::to_string_pretty(&attestation)
-                .inspect_err(|_| ATTESTATION_ERRORS.inc())
-                .context("Failed to serialize Attestation")?;
-            debug!("Attestation: {attestation_str}");
-
-            (session.request().tee, session.challenge().nonce.to_string())
+        let fingerprint = super::session::request_fingerprint(&attestation)?;
+        let session = self
+            .session_map
+            .get(session_id)
+            .await?
+            .context("session not found")?;
+        if let Some(token) = session.completed_token(&fingerprint)? {
+            return Ok(HttpResponse::Ok()
+                .cookie(session.cookie())
+                .json(json!({ "token": token })));
+        }
+        let SessionStatus::Authed {
+            request: auth_request,
+            challenge,
+            ..
+        } = &session
+        else {
+            bail!("session is not awaiting attestation");
         };
+        let tee = auth_request.tee;
+        let nonce = challenge.nonce.clone();
 
         let mut evidence_to_verify: Vec<IndependentEvidence> = vec![];
 
@@ -408,16 +427,7 @@ impl AttestationService {
             }
         }
 
-        let mut session = self
-            .session_map
-            .sessions
-            .get_async(session_id)
-            .await
-            .ok_or(anyhow!("session not found"))
-            .inspect_err(|_| ATTESTATION_ERRORS.inc())?;
-        let session = session.get_mut();
-
-        let tee_type_label = serde_json::to_string(&session.request().tee)?
+        let tee_type_label = serde_json::to_string(&tee)?
             // it seems impossible to prevent serde from putting double-quotes
             // around the tee name, get rid of them subsequently
             .trim_start_matches('"')
@@ -439,18 +449,16 @@ impl AttestationService {
             .with_label_values(&[&tee_type_label])
             .inc();
 
-        let body = serde_json::to_string(&json!({
-            "token": token,
-        }))
-        .inspect_err(|_| ATTESTATION_ERRORS.inc())
-        .context("Serialize token failed")?;
-
-        session.attest(token);
-
+        let completed = self
+            .session_map
+            .complete(&session, &fingerprint, token)
+            .await?;
+        let token = completed
+            .completed_token(&fingerprint)?
+            .context("session not completed")?;
         Ok(HttpResponse::Ok()
-            .cookie(session.cookie())
-            .content_type("application/json")
-            .body(body))
+            .cookie(completed.cookie())
+            .json(json!({ "token": token })))
     }
 
     pub async fn get_attest_token_from_session(
@@ -463,12 +471,12 @@ impl AttestationService {
 
         let session = self
             .session_map
-            .sessions
-            .get_async(cookie.value())
+            .get(cookie.value())
             .await
-            .context("session not found")?;
-
-        let session = session.get();
+            .inspect_err(|_| ATTESTATION_ERRORS.inc())
+            .context("Failed to get session")?
+            .ok_or(anyhow!("session not found"))
+            .inspect_err(|_| ATTESTATION_ERRORS.inc())?;
 
         info!("Cookie {} request to get resource", session.id());
 
@@ -540,6 +548,84 @@ mod tests {
             assert!(!found);
 
             nonces.push(nonce);
+        }
+    }
+    struct MockVerifier;
+    #[async_trait]
+    impl Attest for MockVerifier {
+        async fn verify(&self, _evidence: Vec<IndependentEvidence>) -> anyhow::Result<String> {
+            Ok("mock-attestation-token".into())
+        }
+    }
+
+    #[actix_web::test]
+    async fn handshake_crosses_replicas_and_rejects_changed_evidence() {
+        use actix_web::{body::to_bytes, test::TestRequest};
+        use key_value_storage::memory::MemoryKeyValueStorage;
+        let storage = Arc::new(MemoryKeyValueStorage::default());
+        let replica = || AttestationService {
+            inner: Arc::new(MockVerifier),
+            session_map: SessionMap::new(storage.clone()),
+            timeout: 1,
+        };
+        let a = replica();
+        let b = replica();
+        let auth = a
+            .auth(br#"{"version":"0.4.0","tee":"sample","extra-params":{}}"#)
+            .await
+            .unwrap();
+        let cookie = auth.cookies().next().unwrap().into_owned();
+        let challenge: serde_json::Value =
+            serde_json::from_slice(&to_bytes(auth.into_body()).await.unwrap()).unwrap();
+        drop(a); // The process which issued the challenge is gone.
+        let mut payload = json!({
+            "runtime-data": {"nonce": challenge["nonce"], "tee-pubkey": {"kty":"RSA", "alg":"RSA1_5", "n":"test-key", "e":"AQAB"}},
+            "tee-evidence": {"primary_evidence": {"measurement":"test"}, "additional_evidence":""}
+        });
+        let request = || {
+            TestRequest::default()
+                .cookie(cookie.clone())
+                .to_http_request()
+        };
+        let bytes = serde_json::to_vec(&payload).unwrap();
+        assert!(b.attest(&bytes, request()).await.is_ok());
+        let restarted = replica();
+        assert_eq!(
+            restarted
+                .get_attest_token_from_session(&request())
+                .await
+                .unwrap(),
+            "mock-attestation-token"
+        );
+        let pretty: Attestation = serde_json::from_slice(&bytes).unwrap();
+        assert!(restarted
+            .attest(&serde_json::to_vec_pretty(&pretty).unwrap(), request())
+            .await
+            .is_ok());
+        payload["runtime-data"]["tee-pubkey"]["n"] = json!("other-key");
+        assert!(restarted
+            .attest(&serde_json::to_vec(&payload).unwrap(), request())
+            .await
+            .is_err());
+        payload["runtime-data"]["tee-pubkey"]["n"] = json!("test-key");
+        payload["tee-evidence"]["primary_evidence"]["measurement"] = json!("other-evidence");
+        assert!(restarted
+            .attest(&serde_json::to_vec(&payload).unwrap(), request())
+            .await
+            .is_err());
+    }
+    #[tokio::test]
+    async fn session_backend_rejects_non_atomic_storage_before_connecting() {
+        for backend in [KeyValueStorageType::LocalFs, KeyValueStorageType::LocalJson] {
+            assert!(matches!(
+                AttestationService::new(
+                    Default::default(),
+                    &backend,
+                    &StorageBackendConfig::default()
+                )
+                .await,
+                Err(Error::SessionStorageInitialization { .. })
+            ));
         }
     }
 }
