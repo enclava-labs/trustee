@@ -111,7 +111,11 @@ enum StoredSession {
 }
 
 fn encode(session: &SessionStatus) -> Result<Vec<u8>> {
-    Ok(serde_json::to_vec(&StoredSession::V1(session.clone()))?)
+    let bytes = serde_json::to_vec(&StoredSession::V1(session.clone()))?;
+    // The storage envelope adds nesting to client input. Never persist a record
+    // that readers and expiry cleanup cannot decode within their recursion limit.
+    decode(&bytes).context("encoded session cannot be decoded")?;
+    Ok(bytes)
 }
 
 fn decode(bytes: &[u8]) -> Result<SessionStatus> {

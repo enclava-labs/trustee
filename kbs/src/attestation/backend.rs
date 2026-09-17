@@ -622,6 +622,44 @@ mod tests {
             .is_err());
     }
     #[tokio::test]
+    async fn auth_rejects_unreadable_sessions_before_storage() {
+        use key_value_storage::memory::MemoryKeyValueStorage;
+
+        for depth in 123..=126 {
+            let storage = Arc::new(MemoryKeyValueStorage::default());
+            let service = AttestationService {
+                inner: Arc::new(MockVerifier),
+                session_map: SessionMap::new(storage),
+                timeout: 1,
+            };
+            let body = format!(
+                r#"{{"version":"0.4.0","tee":"snp","extra-params":{}0{}}}"#,
+                "[".repeat(depth),
+                "]".repeat(depth)
+            );
+            // These requests fit the input limit; the stored envelope adds depth.
+            serde_json::from_str::<Request>(&body).unwrap();
+            let result = service.auth(body.as_bytes()).await;
+            if depth == 123 {
+                let response = result.unwrap();
+                let cookie = response.cookies().next().unwrap();
+                assert!(service
+                    .session_map
+                    .get(cookie.value())
+                    .await
+                    .unwrap()
+                    .is_some());
+            } else {
+                assert!(
+                    result.is_err(),
+                    "accepted unreadable session at depth {depth}"
+                );
+                assert!(service.session_map.storage.list().await.unwrap().is_empty());
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn session_backend_rejects_non_atomic_storage_before_connecting() {
         for backend in [KeyValueStorageType::LocalFs, KeyValueStorageType::LocalJson] {
             assert!(matches!(
