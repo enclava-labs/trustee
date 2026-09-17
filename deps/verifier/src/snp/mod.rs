@@ -777,7 +777,7 @@ mod tests {
         let server = tokio::spawn(async move {
             while let Ok((mut stream, _)) = listener.accept().await {
                 let mut request = [0_u8; 4096];
-                stream.read(&mut request).await.unwrap();
+                assert!(stream.read(&mut request).await.unwrap() > 0);
                 request_counter.fetch_add(1, Ordering::SeqCst);
                 let status = statuses.pop_front().unwrap_or(StatusCode::OK);
                 let body = if status == StatusCode::OK {

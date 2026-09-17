@@ -42,6 +42,18 @@ impl KeyValueStorage for MemoryKeyValueStorage {
         Ok(UpdateResult::Updated)
     }
 
+    async fn compare_and_swap(&self, key: &str, expected: &[u8], value: &[u8]) -> Result<bool> {
+        let mut items = self.items.write().await;
+        let Some(current) = items.get_mut(key) else {
+            return Ok(false);
+        };
+        if current.as_slice() != expected {
+            return Ok(false);
+        }
+        *current = value.to_vec();
+        Ok(true)
+    }
+
     #[instrument(skip_all, name = "MemoryKeyValueStorage::list")]
     async fn list(&self) -> Result<Vec<String>> {
         let keys = self.items.read().await.keys().cloned().collect();

@@ -25,6 +25,18 @@ jobs:
     runs-on: ${{ matrix.instance }}
     permissions:
       contents: read
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: trustee_test
+          POSTGRES_PASSWORD: trustee_test
+          POSTGRES_DB: trustee_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U trustee_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - name: Code checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -38,7 +50,7 @@ jobs:
 
       - name: Building dependencies installation
         run: |
-          sudo apt-get update && sudo apt-get install -y protobuf-compiler libprotobuf-dev libtss2-dev
+          sudo apt-get update && sudo apt-get install -y protobuf-compiler libprotobuf-dev libtss2-dev postgresql-client
 
       - name: Install TDX dependencies
         if: ${{ matrix.instance == 'ubuntu-24.04' }}
@@ -64,6 +76,14 @@ jobs:
         env:
           SOFTHSM2_CONF: '${{ runner.temp }}/softhsm/softhsm2.conf'
         run: make test-kbs-unit TEST_FEATURES=${{ matrix.test_features }}
+
+      - name: Verify sessions across PostgreSQL clients
+        env:
+          POSTGRES_URL: postgresql://trustee_test:trustee_test@localhost:5432/trustee_test
+        run: |
+          psql "$POSTGRES_URL" -v ON_ERROR_STOP=1 -f kbs/test_data/sql/sessions.sql
+          cargo test --locked -p kbs --no-default-features --features coco-as-grpc \
+            postgres_sessions_survive_client_replacement -- --ignored
 
   as:
     name: Attestation Service (AS)

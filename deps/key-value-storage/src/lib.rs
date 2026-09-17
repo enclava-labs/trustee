@@ -53,6 +53,14 @@ pub trait KeyValueStorage: Send + Sync {
     /// Update a value only when the key already exists.
     async fn update_if_present(&self, key: &str, value: &[u8]) -> Result<UpdateResult>;
 
+    /// Atomically replace an existing value only if its bytes still match.
+    /// Backends without a cross-client atomic implementation must fail closed.
+    async fn compare_and_swap(&self, _key: &str, _expected: &[u8], _value: &[u8]) -> Result<bool> {
+        Err(KeyValueStorageError::InvalidConfiguration {
+            message: "atomic compare-and-swap is not supported by this backend".into(),
+        })
+    }
+
     /// List all keys.
     async fn list(&self) -> Result<Vec<String>>;
 
