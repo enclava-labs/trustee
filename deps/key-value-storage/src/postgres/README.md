@@ -41,6 +41,28 @@ Connection string format constructed internally:
 
 If `POSTGRES_URL` env is set with postgres connection URI, use it instead of the config.
 
+## TLS
+
+`sqlx` is built with the `tls-rustls-ring-webpki` feature (rustls with the
+ring provider and WebPKI roots), so `verify-full` connections are supported.
+To require a verified connection, pass the TLS parameters through
+`POSTGRES_URL`:
+
+```text
+postgresql://user@host:5432/db?sslmode=verify-full&sslrootcert=/path/to/ca.crt
+```
+
+Notes:
+
+- SQLx parses the URL directly, including normal certificate paths such as
+  `/run/db-certs/ca.crt`.
+- With `sslmode=verify-full`, SQLx refuses servers that do not offer TLS and
+  rejects wrong CAs and hostnames. Without an explicit `sslmode` the SQLx
+  `prefer` default can silently connect in plaintext.
+- The ignored test `tests/postgres_tls.rs` checks against disposable local
+  clusters that a correct CA and hostname connect, wrong CAs and hostnames are
+  refused, and `verify-full` never falls back to plaintext.
+
 ## Testing
 
 There is an ignored async test that demonstrates end-to-end usage. To run it locally:
