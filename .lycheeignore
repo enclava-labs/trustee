@@ -1,2 +1,12 @@
 https://developer.hashicorp.com
 https://uefi.org/specs/UEFI/2.11/38_Confidential_Computing.html
+
+# IBM documentation returns HTTP 403 to automated link checks.
+^https://www\.ibm\.com/docs/en/linux-on-systems\?topic=execution-obtain-host-key-document$
+^https://www\.ibm\.com/docs/en/cic/1\.2\.5\?topic=kvm-generate-secure-execution-image$
+^https://www\.ibm\.com/docs/en/linux-on-systems\?topic=management-secure-execution$
+
+# TCG specification downloads also return HTTP 403 to automated checks.
+^https://trustedcomputinggroup\.org/wp-content/uploads/TCG_PCClient_PFP_r1p05_v22_02dec2020\.pdf$
+^https://trustedcomputinggroup\.org/wp-content/uploads/EFI-Protocol-Specification-rev13-160330final\.pdf$
+^https://trustedcomputinggroup\.org/wp-content/uploads/TCG_PCClient_PFP_r1p05_05_3feb20\.pdf$

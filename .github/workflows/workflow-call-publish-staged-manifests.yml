@@ -11,7 +11,8 @@ on:
         description: 'JSON array of architecture suffixes used in per-arch tags'
         type: string
         required: false
-        default: '["x86_64","aarch64","s390x"]'
+        # Keep in sync with the architectures built by this fork's image matrix.
+        default: '["x86_64","aarch64"]'
     secrets:
       ghcr_token:
         description: "Token for GHCR push"
