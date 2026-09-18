@@ -40,6 +40,24 @@ cross-client atomic completion required here. Missing configuration means
 Memory; it does not inherit the policy storage type. Backend errors propagate,
 with no fallback to an empty in-memory store.
 
+### Transport security (TLS)
+
+The PostgreSQL driver is built with SQLx's rustls backend (ring provider,
+WebPKI roots). Deployments that require verified TLS pass the parameters in
+`POSTGRES_URL`:
+
+```text
+postgresql://trustee@postgres.example.internal:5432/trustee?sslmode=verify-full&sslrootcert=/etc/trustee/ca.crt
+```
+
+SQLx parses the URL directly. Certificate contents and mount paths are
+deployment-owned. `sslrootcert` extends the bundled WebPKI root set; it does
+not restrict trust to the configured CA alone, so a server certificate
+chaining to a public CA still verifies under `verify-full`.
+With `sslmode=verify-full`, SQLx refuses servers that do not offer TLS and
+rejects wrong CAs or hostnames; without an explicit `sslmode` the SQLx
+`prefer` default attempts TLS first and can silently fall back to plaintext.
+
 ## Protocol and security
 
 Sessions have a versioned serialization containing the challenge, immutable
@@ -113,6 +131,19 @@ The PostgreSQL test uses independent clients for competing identical and
 mismatched completions, denies completion after deletion, and replaces the
 issuing client before continuing the handshake. Unit tests cover expiry,
 corruption, unknown versions and an HTTP auth-on-A/attest-on-B flow.
+
+A TLS regression (`deps/key-value-storage/tests/postgres_tls.rs`, ignored)
+covers `verify-full` end to end against disposable local clusters: a correct
+CA and hostname connect and round-trip data, a wrong CA
+(`POSTGRES_TLS_WRONG_CA_URL`) and a wrong hostname
+(`POSTGRES_TLS_WRONG_HOST_URL`) are refused, and `POSTGRES_TLS_NO_TLS_URL`
+proves that a server without TLS is rejected instead of silently downgraded to
+plaintext. Run the disposable TLS fixture from the repository root (requires
+PostgreSQL tools, OpenSSL and a non-root user):
+
+```sh
+bash deps/key-value-storage/tests/postgres_tls.sh
+```
 
 ## Upstream provenance
 

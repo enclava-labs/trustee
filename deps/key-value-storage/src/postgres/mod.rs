@@ -5,10 +5,9 @@
 //! PostgreSQL backend for the key-value storage.
 
 use std::env;
-use std::str::FromStr;
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context};
+use anyhow::anyhow;
 use async_trait::async_trait;
 use educe::Educe;
 use serde::Deserialize;
@@ -85,21 +84,13 @@ impl PostgresClient {
             config.port,
             config.db
         ));
-        let url = pg_connection_string::ConnectionString::from_str(&url)
-            .map_err(|e| KeyValueStorageError::InitializeBackendFailed {
-                source: anyhow!("failed to parse PostgreSQL connection string: {e}"),
-            })?
-            .to_string();
         info!("Connecting to PostgreSQL storage");
 
         let pool = PgPoolOptions::new()
             .max_connections(MAX_CONNECTIONS)
             .connect(&url)
             .await
-            .context("failed to connect to PostgreSQL DB")
-            .map_err(|e| KeyValueStorageError::InitializeBackendFailed {
-                source: anyhow!("failed to connect to PostgreSQL DB: {e}"),
-            })?;
+            .map_err(|e| KeyValueStorageError::InitializeBackendFailed { source: e.into() })?;
 
         Ok(Self {
             pool: Arc::new(pool),
