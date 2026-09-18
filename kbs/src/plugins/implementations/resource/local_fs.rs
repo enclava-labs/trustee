@@ -42,7 +42,7 @@ impl LocalFs {
 #[async_trait::async_trait]
 impl StorageBackend for LocalFs {
     async fn read_secret_resource(&self, resource_desc: ResourceDesc) -> Result<Vec<u8>> {
-        let _ = self.lock.read().await;
+        let _guard = self.lock.read().await;
         let resource_path = self.resource_path(&resource_desc);
 
         match tokio::fs::read(&resource_path).await {
@@ -56,7 +56,7 @@ impl StorageBackend for LocalFs {
     }
 
     async fn write_secret_resource(&self, resource_desc: ResourceDesc, data: &[u8]) -> Result<()> {
-        let _ = self.lock.write().await;
+        let _guard = self.lock.write().await;
         let resource_path = self.resource_path(&resource_desc);
 
         if let Some(parent) = resource_path.parent() {
@@ -77,7 +77,7 @@ impl StorageBackend for LocalFs {
         resource_desc: ResourceDesc,
         data: &[u8],
     ) -> Result<bool> {
-        let _ = self.lock.write().await;
+        let _guard = self.lock.write().await;
         let resource_path = self.resource_path(&resource_desc);
 
         if let Some(parent) = resource_path.parent() {
@@ -104,6 +104,12 @@ impl StorageBackend for LocalFs {
         file.write_all(data)
             .await
             .with_context(|| format!("failed to write resource {}", resource_path.display()))?;
+        // tokio::fs::File::write_all resolves while the write is still in
+        // flight on the blocking pool; flush drains it so the lock is only
+        // released once the bytes reached the file.
+        file.flush()
+            .await
+            .with_context(|| format!("failed to flush resource {}", resource_path.display()))?;
 
         Ok(true)
     }
@@ -113,7 +119,7 @@ impl StorageBackend for LocalFs {
         resource_desc: ResourceDesc,
         data: &[u8],
     ) -> Result<bool> {
-        let _ = self.lock.write().await;
+        let _guard = self.lock.write().await;
         let resource_path = self.resource_path(&resource_desc);
         let file = tokio::fs::OpenOptions::new()
             .write(true)
@@ -133,12 +139,17 @@ impl StorageBackend for LocalFs {
         file.write_all(data)
             .await
             .with_context(|| format!("failed to write resource {}", resource_path.display()))?;
+        // See the flush in write_secret_resource_if_absent: without it the
+        // write may still be in flight when the write lock is released.
+        file.flush()
+            .await
+            .with_context(|| format!("failed to flush resource {}", resource_path.display()))?;
 
         Ok(true)
     }
 
     async fn delete_secret_resource(&self, resource_desc: ResourceDesc) -> Result<()> {
-        let _ = self.lock.write().await;
+        let _guard = self.lock.write().await;
         let resource_path = self.resource_path(&resource_desc);
 
         match tokio::fs::remove_file(&resource_path).await {
@@ -150,7 +161,7 @@ impl StorageBackend for LocalFs {
     }
 
     async fn delete_secret_resource_if_present(&self, resource_desc: ResourceDesc) -> Result<bool> {
-        let _ = self.lock.write().await;
+        let _guard = self.lock.write().await;
         let resource_path = self.resource_path(&resource_desc);
 
         match tokio::fs::remove_file(&resource_path).await {
@@ -259,6 +270,48 @@ mod tests {
             .await
             .expect("read secret resource failed");
         assert_eq!(&data[..], b"first");
+    }
+
+    #[tokio::test]
+    async fn concurrent_reads_observe_complete_replacements() {
+        let dir = tempdir().unwrap();
+        let storage = LocalFs::new(LocalFsConfig {
+            dir_path: dir.path().to_string_lossy().to_string(),
+        });
+        let resource = ResourceDesc {
+            repository_name: "default".into(),
+            resource_type: "test-owner".into(),
+            resource_tag: "concurrent-replace".into(),
+        };
+        const SIZE: usize = 64 * 1024;
+        assert!(storage
+            .write_secret_resource_if_absent(resource.clone(), &vec![0; SIZE])
+            .await
+            .unwrap());
+
+        let writes = async {
+            for value in 1..=32 {
+                assert!(storage
+                    .write_secret_resource_if_present(resource.clone(), &vec![value; SIZE])
+                    .await
+                    .unwrap());
+            }
+        };
+        let reads = async {
+            for _ in 0..64 {
+                let data = storage
+                    .read_secret_resource(resource.clone())
+                    .await
+                    .unwrap();
+                assert_eq!(data.len(), SIZE);
+                assert!(data.iter().all(|byte| *byte == data[0]));
+            }
+        };
+        tokio::join!(writes, reads);
+        assert_eq!(
+            storage.read_secret_resource(resource).await.unwrap(),
+            vec![32; SIZE]
+        );
     }
 
     #[tokio::test]

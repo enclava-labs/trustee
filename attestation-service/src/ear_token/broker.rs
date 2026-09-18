@@ -560,8 +560,10 @@ mod tests {
             cert_path: None,
         };
 
-        let mut config = EarTokenConfiguration::default();
-        config.signer = Some(signer);
+        let config = EarTokenConfiguration {
+            signer: Some(signer),
+            ..Default::default()
+        };
         let storage = KeyValueStorageStructConfig::default()
             .to_client_with_namespace(KeyValueStorageType::Memory, AS_POLICY_STORAGE_NAMESPACE)
             .await

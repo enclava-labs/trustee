@@ -38,7 +38,7 @@ jobs:
 
       - name: Building dependencies installation
         run: |
-          sudo apt-get update && sudo apt-get install -y protobuf-compiler libprotobuf-dev libtss2-dev
+          sudo apt-get update && sudo apt-get install -y protobuf-compiler libprotobuf-dev libtss2-dev postgresql openssl python3
 
       - name: Install TDX dependencies
         if: ${{ matrix.instance == 'ubuntu-24.04' }}
@@ -64,6 +64,13 @@ jobs:
         env:
           SOFTHSM2_CONF: '${{ runner.temp }}/softhsm/softhsm2.conf'
         run: make test-kbs-unit TEST_FEATURES=${{ matrix.test_features }}
+
+      - name: Verify PostgreSQL TLS and sessions across clients
+        run: |
+          bash deps/key-value-storage/tests/postgres_tls.sh
+          bash deps/key-value-storage/tests/postgres_tls.sh \
+            cargo test --locked -p kbs --no-default-features --features coco-as-grpc \
+              postgres_sessions_survive_client_replacement -- --ignored
 
   as:
     name: Attestation Service (AS)

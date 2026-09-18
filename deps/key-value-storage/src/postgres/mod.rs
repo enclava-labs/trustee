@@ -5,10 +5,9 @@
 //! PostgreSQL backend for the key-value storage.
 
 use std::env;
-use std::str::FromStr;
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context};
+use anyhow::anyhow;
 use async_trait::async_trait;
 use educe::Educe;
 use serde::Deserialize;
@@ -85,21 +84,13 @@ impl PostgresClient {
             config.port,
             config.db
         ));
-        let url = pg_connection_string::ConnectionString::from_str(&url)
-            .map_err(|e| KeyValueStorageError::InitializeBackendFailed {
-                source: anyhow!("failed to parse PostgreSQL connection string: {e}"),
-            })?
-            .to_string();
-        info!("Connecting to PostgreSQL DB: {url}");
+        info!("Connecting to PostgreSQL storage");
 
         let pool = PgPoolOptions::new()
             .max_connections(MAX_CONNECTIONS)
             .connect(&url)
             .await
-            .context("failed to connect to PostgreSQL DB")
-            .map_err(|e| KeyValueStorageError::InitializeBackendFailed {
-                source: anyhow!("failed to connect to PostgreSQL DB: {e}"),
-            })?;
+            .map_err(|e| KeyValueStorageError::InitializeBackendFailed { source: e.into() })?;
 
         Ok(Self {
             pool: Arc::new(pool),
@@ -187,6 +178,30 @@ impl KeyValueStorage for PostgresClient {
         }
 
         Ok(UpdateResult::Updated)
+    }
+
+    async fn compare_and_swap(&self, key: &str, expected: &[u8], value: &[u8]) -> Result<bool> {
+        if !is_valid_key(key) {
+            return Err(KeyValueStorageError::SetKeyFailed {
+                source: anyhow!("key contains invalid characters"),
+                key: key.to_string(),
+            });
+        }
+        let sql = format!(
+            "UPDATE {} SET {VALUE_COLUMN} = $3 WHERE {KEY_COLUMN} = $1 AND {VALUE_COLUMN} = $2",
+            self.table
+        );
+        let result = query(&sql)
+            .bind(key)
+            .bind(expected)
+            .bind(value)
+            .execute(&*self.pool)
+            .await
+            .map_err(|source| KeyValueStorageError::SetKeyFailed {
+                source: source.into(),
+                key: key.to_string(),
+            })?;
+        Ok(result.rows_affected() == 1)
     }
 
     #[instrument(skip_all, name = "PostgresClient::list")]

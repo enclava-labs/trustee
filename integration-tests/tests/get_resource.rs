@@ -184,29 +184,22 @@ async fn get_secret(
     // Test Result
     info!("TEST: checking result");
 
-    if expected_result.is_err() {
-        // If the test passes, we have a problem.
-        if secret.is_ok() {
+    match (expected_result, secret) {
+        (Err(_), Ok(_)) => {
             bail!("Secret retrieved when test is expected to fail.");
         }
-        // If the test fails, make sure the error message matches.
-        else {
-            if secret.unwrap_err().to_string() != expected_result.unwrap_err().to_string() {
+        (Err(expected), Err(actual)) => {
+            if actual.to_string() != expected.to_string() {
                 bail!(
                     "Test is expected to fail, and it did fail, but with the wrong error message."
                 );
-            };
+            }
         }
-    }
-    // If we expect the test to pass
-    else {
-        // If the test does not pass, we have a problem.
-        if secret.is_err() {
+        (Ok(_), Err(_)) => {
             bail!("Failed to get secret when test is expected to pass.");
         }
-        // If we get a secret, make sure it's the right one.
-        else {
-            if secret? != SECRET_BYTES {
+        (Ok(_), Ok(secret)) => {
+            if secret != SECRET_BYTES {
                 bail!("Secret retrieved, but secret has wrong value");
             }
         }

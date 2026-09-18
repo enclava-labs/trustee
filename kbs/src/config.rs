@@ -8,7 +8,7 @@ use crate::token::AttestationTokenVerifierConfig;
 use anyhow::anyhow;
 use clap::Parser;
 use config::{Config, File};
-use key_value_storage::StorageBackendConfig;
+use key_value_storage::{KeyValueStorageType, StorageBackendConfig};
 use serde::Deserialize;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -112,6 +112,13 @@ pub struct KbsConfig {
     /// - Built-in AS RVPS storage (instance: [`rvps::REFERENCE_VALUE_STORAGE_NAMESPACE`])
     #[serde(default)]
     pub storage_backend: StorageBackendConfig,
+
+    /// Optional session storage type used for KBS protocol session state.
+    ///
+    /// Defaults to Memory for compatibility. Postgres must be explicitly enabled.
+    /// Use this field to specify an additional storage backend just for KBS protocol session state.
+    #[serde(default)]
+    pub session_storage_type: Option<KeyValueStorageType>,
 
     #[serde(default)]
     pub plugins: Vec<PluginsConfig>,
@@ -228,6 +235,7 @@ mod tests {
                 postgres: None,
             },
         },
+        session_storage_type: None,
         plugins: vec![PluginsConfig::Sample(SampleConfig {
             item: "value1".into(),
         }),
@@ -273,6 +281,7 @@ mod tests {
             trusted_descriptor_public_keys: Vec::new(),
         },
         storage_backend: StorageBackendConfig::default(),
+        session_storage_type: None,
         plugins: vec![PluginsConfig::ResourceStorage(RepositoryConfig::LocalFs {
             dir_path: "/opt/confidential-containers/kbs/repository".into(),
         })],
@@ -328,6 +337,7 @@ mod tests {
                 postgres: None,
             },
         },
+        session_storage_type: None,
         plugins: Vec::new(),
     })]
     #[case("test_data/configs/intel-ta-1.toml",         KbsConfig {
@@ -376,6 +386,7 @@ mod tests {
                 postgres: None,
             },
         },
+        session_storage_type: None,
         plugins: vec![PluginsConfig::Sample(SampleConfig {
             item: "value1".into(),
         }),
@@ -426,6 +437,7 @@ mod tests {
                 postgres: None,
             },
         },
+        session_storage_type: Some(KeyValueStorageType::Memory),
         plugins: Vec::new(),
     })]
     #[case("test_data/configs/coco-as-builtin-2.toml",         KbsConfig {
@@ -476,6 +488,7 @@ mod tests {
                 postgres: None,
             },
         },
+        session_storage_type: Some(KeyValueStorageType::Memory),
         plugins: Vec::new(),
     })]
     #[case("test_data/configs/intel-ta-2.toml",         KbsConfig {
@@ -515,6 +528,7 @@ mod tests {
         },
         policy_engine: PolicyEngineConfig::default(),
         storage_backend: StorageBackendConfig::default(),
+        session_storage_type: Some(KeyValueStorageType::Memory),
         plugins: Vec::new(),
     })]
     #[case("test_data/configs/coco-as-grpc-3.toml",         KbsConfig {
@@ -544,6 +558,7 @@ mod tests {
         },
         policy_engine: PolicyEngineConfig::default(),
         storage_backend: StorageBackendConfig::default(),
+        session_storage_type: None,
         plugins: Vec::new(),
     })]
     #[case("test_data/configs/intel-ta-3.toml",         KbsConfig {
@@ -579,6 +594,7 @@ mod tests {
         },
         policy_engine: PolicyEngineConfig::default(),
         storage_backend: StorageBackendConfig::default(),
+        session_storage_type: None,
         plugins: Vec::new(),
     })]
     #[case("test_data/configs/coco-as-builtin-3.toml",         KbsConfig {
@@ -629,6 +645,7 @@ mod tests {
                 postgres: None,
             },
         },
+        session_storage_type: None,
         plugins: vec![
             PluginsConfig::ResourceStorage(RepositoryConfig::KvStorage),
         ],
