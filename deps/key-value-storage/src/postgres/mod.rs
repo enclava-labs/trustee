@@ -90,13 +90,7 @@ impl PostgresClient {
             .max_connections(MAX_CONNECTIONS)
             .connect(&url)
             .await
-            .map_err(|e| {
-                KeyValueStorageError::InitializeBackendFailed {
-                    // Keep the SQLx error chain (e.g. TLS handshake refusals) as
-                    // context instead of flattening it into a bare message.
-                    source: anyhow::Error::from(e).context("failed to connect to PostgreSQL DB"),
-                }
-            })?;
+            .map_err(|e| KeyValueStorageError::InitializeBackendFailed { source: e.into() })?;
 
         Ok(Self {
             pool: Arc::new(pool),

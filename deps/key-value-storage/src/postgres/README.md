@@ -56,12 +56,18 @@ Notes:
 
 - SQLx parses the URL directly, including normal certificate paths such as
   `/run/db-certs/ca.crt`.
+- `sslrootcert` adds the given CA to the bundled WebPKI root set; it does not
+  restrict trust to it. A server certificate chaining to any publicly trusted
+  CA still verifies under `verify-full`, so exclusive private-CA trust needs
+  network-level controls as well.
 - With `sslmode=verify-full`, SQLx refuses servers that do not offer TLS and
   rejects wrong CAs and hostnames. Without an explicit `sslmode` the SQLx
-  `prefer` default can silently connect in plaintext.
+  `prefer` default attempts TLS and falls back to plaintext when the handshake
+  fails; do not rely on it for confidentiality.
 - The ignored test `tests/postgres_tls.rs` checks against disposable local
   clusters that a correct CA and hostname connect, wrong CAs and hostnames are
-  refused, and `verify-full` never falls back to plaintext.
+  refused (asserting the certificate-refusal errors, not just any failure),
+  and `verify-full` never falls back to plaintext.
 
 ## Testing
 

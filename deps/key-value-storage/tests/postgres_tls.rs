@@ -87,7 +87,12 @@ async fn postgres_verify_full_tls_is_enforced() {
         connect_with(&required_env("POSTGRES_TLS_WRONG_CA_URL")).await,
         "verify-full must reject a server certified by another CA",
     );
-    eprintln!("wrong CA refused with: {}", error_chain(&err));
+    let message = error_chain(&err);
+    eprintln!("wrong CA refused with: {message}");
+    assert!(
+        message.to_lowercase().contains("unknownissuer"),
+        "expected a certificate-chain refusal, got: {message}"
+    );
 
     // Wrong hostname: the server certificate does not cover the name used to
     // reach it. A client that skipped hostname verification would connect
@@ -96,7 +101,12 @@ async fn postgres_verify_full_tls_is_enforced() {
         connect_with(&required_env("POSTGRES_TLS_WRONG_HOST_URL")).await,
         "verify-full must reject a certificate for another hostname",
     );
-    eprintln!("wrong hostname refused with: {}", error_chain(&err));
+    let message = error_chain(&err);
+    eprintln!("wrong hostname refused with: {message}");
+    assert!(
+        message.to_lowercase().contains("not valid for name"),
+        "expected a hostname-verification refusal, got: {message}"
+    );
 
     // Server without TLS: verify-full must fail loudly instead of silently
     // continuing in plaintext (the SQLx `prefer` default).

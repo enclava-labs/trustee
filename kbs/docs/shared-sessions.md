@@ -51,10 +51,12 @@ postgresql://trustee@postgres.example.internal:5432/trustee?sslmode=verify-full&
 ```
 
 SQLx parses the URL directly. Certificate contents and mount paths are
-deployment-owned.
+deployment-owned. `sslrootcert` extends the bundled WebPKI root set; it does
+not restrict trust to the configured CA alone, so a server certificate
+chaining to a public CA still verifies under `verify-full`.
 With `sslmode=verify-full`, SQLx refuses servers that do not offer TLS and
 rejects wrong CAs or hostnames; without an explicit `sslmode` the SQLx
-`prefer` default can silently use plaintext.
+`prefer` default attempts TLS first and can silently fall back to plaintext.
 
 ## Protocol and security
 

@@ -14,7 +14,9 @@ with socket.socket() as a, socket.socket() as b:
     print(a.getsockname()[1], b.getsockname()[1])
 PY
 )
-mkdir -p "$WORK/socket"
+# Sockets are placed in /tmp regardless of TMPDIR (see unix_socket_directories
+# below): the sun_path limit is 107 bytes and a long TMPDIR would break socket
+# startup and setup queries.
 cleanup() {
   "$PGBIN/pg_ctl" -D "$WORK/pgdata-tls"  -m immediate stop >/dev/null 2>&1 || true
   "$PGBIN/pg_ctl" -D "$WORK/pgdata-plain" -m immediate stop >/dev/null 2>&1 || true
@@ -51,7 +53,7 @@ done
 cat >> "$WORK/pgdata-tls/postgresql.conf" <<EOF
 listen_addresses = 'localhost'
 port = $PORT_A
-unix_socket_directories = '$WORK/socket'
+unix_socket_directories = '/tmp'
 ssl = on
 ssl_cert_file = '$WORK/server.crt'
 ssl_key_file = '$WORK/server-key'
@@ -59,17 +61,17 @@ EOF
 cat >> "$WORK/pgdata-plain/postgresql.conf" <<EOF
 listen_addresses = 'localhost'
 port = $PORT_B
-unix_socket_directories = '$WORK/socket'
+unix_socket_directories = '/tmp'
 ssl = off
 EOF
 "$PGBIN/pg_ctl" -D "$WORK/pgdata-tls"   -l "$WORK/pg-tls.log"   -w start >/dev/null
 "$PGBIN/pg_ctl" -D "$WORK/pgdata-plain" -l "$WORK/pg-plain.log" -w start >/dev/null
 
-PSQL="$PGBIN/psql -h $WORK/socket -p $PORT_A -U trustee -d postgres -v ON_ERROR_STOP=1"
-$PSQL -c 'CREATE DATABASE trustee' >/dev/null
-$PSQL -d trustee -c 'CREATE TABLE kvs_tls_regression (key TEXT PRIMARY KEY, value BYTEA)' >/dev/null
-$PSQL -d trustee -c 'CREATE TABLE key_value (value BYTEA, key TEXT PRIMARY KEY)' >/dev/null
-$PSQL -d trustee -f "$REPO/kbs/test_data/sql/sessions.sql" >/dev/null
+PSQL=("$PGBIN/psql" -h /tmp -p "$PORT_A" -U trustee -v ON_ERROR_STOP=1)
+"${PSQL[@]}" -d postgres -c 'CREATE DATABASE trustee' >/dev/null
+"${PSQL[@]}" -d trustee -c 'CREATE TABLE kvs_tls_regression (key TEXT PRIMARY KEY, value BYTEA)' >/dev/null
+"${PSQL[@]}" -d trustee -c 'CREATE TABLE key_value (value BYTEA, key TEXT PRIMARY KEY)' >/dev/null
+"${PSQL[@]}" -d trustee -f "$REPO/kbs/test_data/sql/sessions.sql" >/dev/null
 
 export POSTGRES_URL="postgresql://trustee@localhost:$PORT_A/trustee?sslmode=verify-full&sslrootcert=$WORK/ca.crt"
 export POSTGRES_TLS_WRONG_CA_URL="postgresql://trustee@localhost:$PORT_A/trustee?sslmode=verify-full&sslrootcert=$WORK/wrong-ca.crt"
