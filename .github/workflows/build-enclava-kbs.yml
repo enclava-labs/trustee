@@ -82,7 +82,7 @@ jobs:
       - name: Verify PostgreSQL TLS and sessions across clients
         if: matrix.package == 'kbs'
         run: |
-          sudo apt-get install -y postgresql
+          sudo apt-get install -y postgresql openssl python3
           bash deps/key-value-storage/tests/postgres_tls.sh
           bash deps/key-value-storage/tests/postgres_tls.sh \
             cargo test --locked -p kbs --no-default-features --features coco-as-grpc \
