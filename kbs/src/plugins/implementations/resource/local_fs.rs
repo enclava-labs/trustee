@@ -104,6 +104,9 @@ impl StorageBackend for LocalFs {
         file.write_all(data)
             .await
             .with_context(|| format!("failed to write resource {}", resource_path.display()))?;
+        // tokio::fs::File::write_all resolves while the write is still in
+        // flight on the blocking pool; flush drains it so the lock is only
+        // released once the bytes reached the file.
         file.flush()
             .await
             .with_context(|| format!("failed to flush resource {}", resource_path.display()))?;
@@ -136,6 +139,8 @@ impl StorageBackend for LocalFs {
         file.write_all(data)
             .await
             .with_context(|| format!("failed to write resource {}", resource_path.display()))?;
+        // See the flush in write_secret_resource_if_absent: without it the
+        // write may still be in flight when the write lock is released.
         file.flush()
             .await
             .with_context(|| format!("failed to flush resource {}", resource_path.display()))?;
