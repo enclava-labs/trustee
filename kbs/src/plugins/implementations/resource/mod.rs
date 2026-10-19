@@ -81,7 +81,7 @@ impl ClientPlugin for ResourceStorage {
                             .delete_existing_secret_resource(resource_description)
                             .await?
                         {
-                            bail!("resource precondition failed: resource does not exist");
+                            bail!("resource not found: {resource_desc}");
                         }
                     }
                     Some(other) => bail!("unsupported resource condition: {other}"),
