@@ -1784,6 +1784,50 @@ mod workload_resource_tests {
         ));
     }
 
+    #[tokio::test]
+    async fn workload_delete_retry_returns_absence_after_erasure() {
+        use crate::plugins::{
+            plugin_manager::ClientPlugin,
+            resource::{RepositoryConfig, ResourceDesc, ResourceStorage},
+        };
+
+        let storage = ResourceStorage::new(
+            RepositoryConfig::KvStorage,
+            &key_value_storage::StorageBackendConfig {
+                storage_type: KeyValueStorageType::Memory,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let path = ["default", "teardown-owner", "seed-encrypted"];
+        storage
+            .set_secret_resource(
+                ResourceDesc::try_from(path.join("/").as_str()).unwrap(),
+                b"ciphertext",
+            )
+            .await
+            .unwrap();
+        let query = std::collections::HashMap::from([(
+            crate::plugins::resource::WORKLOAD_RESOURCE_CONDITION_QUERY.to_string(),
+            crate::plugins::resource::WORKLOAD_RESOURCE_CONDITION_DELETE.to_string(),
+        )]);
+
+        storage
+            .handle(&[], &query, &path, &Method::DELETE)
+            .await
+            .unwrap();
+        let absent = storage
+            .handle(&[], &query, &path, &Method::DELETE)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            actix_web::ResponseError::error_response(&map_workload_resource_plugin_error(absent))
+                .status(),
+            actix_web::http::StatusCode::NOT_FOUND
+        );
+    }
+
     #[test]
     #[serial]
     fn test_attestation_verify_rejects_body_token_without_caller_auth() {

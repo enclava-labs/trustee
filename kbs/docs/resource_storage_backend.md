@@ -30,9 +30,13 @@ requires HTTP preconditions:
 | --------- | --------------- | ---------------- |
 | First write | `If-None-Match: *` | Create only when the resource is absent. |
 | Rekey/replace | `If-Match: *` | Replace only when the resource is present. |
-| Delete | `If-Match: *` | Delete only when the resource is present. |
+| Delete | `If-Match: *` | Delete when present; return `404 Not Found` when already absent. |
 
 Requests without one of these headers fail closed with `412 Precondition Failed`.
+An authenticated, authorized delete of an absent resource returns `404`, including
+a retry after successful erasure. Invalid precondition headers still return `412`;
+storage failures and authorization failures must not be interpreted as absence.
+
 For the key-value backed resource repository, first write uses the storage
 backend's insert-if-absent path (`SetParameters { overwrite: false }`), replace
 uses `update_if_present`, and delete uses `delete_if_present`. These operations
