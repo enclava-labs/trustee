@@ -15,8 +15,6 @@
 [![Docs.rs](https://docs.rs/shadow-rs/badge.svg)](https://docs.rs/shadow-rs)
 [![Download](https://img.shields.io/crates/d/shadow-rs)](https://crates.io/crates/shadow-rs)
 [![DepStatus](https://deps.rs/repo/github/baoyachi/shadow-rs/status.svg)](https://deps.rs/repo/github/baoyachi/shadow-rs)
-[![Gitter](https://badges.gitter.im/shadow-rs/community.svg)](https://gitter.im/shadow-rs/community?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge)
-[![Coverage Status](https://coveralls.io/repos/github/baoyachi/shadow-rs/badge.svg)](https://coveralls.io/github/baoyachi/shadow-rs)
 `shadow-rs` allows you to access properties of the build process and environment at runtime, including:
 
 * `Cargo.toml` information, such as the project version
@@ -35,7 +33,7 @@ link:
 * [example_wasm](https://github.com/baoyachi/shadow-rs/tree/master/example_wasm)
 * [example_no_std](https://github.com/baoyachi/shadow-rs/tree/master/example_no_std)
 
-![build_module](./build_module.png)
+![build_module](https://raw.githubusercontent.com/baoyachi/shadow-rs/544adb4738e9ae8c9917f211ca96edc57a0e04b9/build_module.png)
 
 # BuildPattern
 The BuildPattern enum defines strategies for triggering package rebuilding. **Default mode is `Lazy`**.

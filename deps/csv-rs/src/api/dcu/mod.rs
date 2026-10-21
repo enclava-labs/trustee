@@ -12,7 +12,6 @@ use codicon::Decoder;
 use log::*;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self};
-use std::path::Path;
 pub use types::*;
 
 /// Reads the DCU ID from the sysfs topology node.
@@ -191,38 +190,6 @@ pub fn verify_report(
         "Successfully verified report for Chip ID: {}",
         String::from_utf8_lossy(&report.body.chip_id)
     );
-
-    Ok(())
-}
-
-/// Saves certificates to local files
-fn save_certificates(
-    hsk: &ca::Certificate,
-    cek: &csv::Certificate,
-    hrk: &ca::Certificate,
-    chip_id: [u8; 16],
-) -> Result<(), Error> {
-    // Define certificates directory path
-    let certs_dir = Path::new("/opt/dcu/certs");
-
-    // Create directory recursively if it doesn't exist (similar to mkdir -p)
-    if !certs_dir.exists() {
-        fs::create_dir_all(certs_dir)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-    }
-
-    // Write HSK certificate
-    hsk.write_to_file(&certs_dir.join("hsk.cert"))?;
-
-    // Convert chip_id to string
-    let chip_id_str = String::from_utf8(chip_id.to_vec())
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-
-    // Write CEK certificate (with chip_id in filename)
-    cek.write_to_file(&certs_dir.join(format!("{}_cek.cert", chip_id_str)))?;
-
-    // Write HRK certificate
-    hrk.write_to_file(&certs_dir.join("hrk.cert"))?;
 
     Ok(())
 }

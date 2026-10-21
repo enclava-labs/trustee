@@ -16,13 +16,13 @@ CSV API根据其被调用的方式分为：
 
 ## Management API
 ### Platform Management
-请参考[Platform API 相关文档](docs/platform/README.md).
+请参考[Platform API 相关文档](https://github.com/openanolis/csv-rs/blob/af78aaaf60a9747eac6d45c0c80a3664f1494ef8/docs/platform/README.md).
 ### Launch Management
-请参考[Launch API 相关文档](docs/launch/README.md).
+请参考[Launch API 相关文档](https://github.com/openanolis/csv-rs/blob/af78aaaf60a9747eac6d45c0c80a3664f1494ef8/docs/launch/README.md).
 ## Guest API
-请参考[Guest API 相关文档](docs/guest/README.md).
+请参考[Guest API 相关文档](https://github.com/openanolis/csv-rs/blob/af78aaaf60a9747eac6d45c0c80a3664f1494ef8/docs/guest/README.md).
 
 ## DCU API
-请参考[DCU API 相关文档](docs/dcu/README.md).
+请参考[DCU API 相关文档](https://github.com/openanolis/csv-rs/blob/7f54d3f925972b9d3c4a6e01ce5a1fe974203dfb/docs/dcu/README.md).
 
 License: Apache-2.0

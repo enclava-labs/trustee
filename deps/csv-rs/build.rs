@@ -28,4 +28,8 @@ fn main() {
             _ => panic!("Unsupported openssl version:0x{:x}", version),
         }
     }
+    // The cfgs above are set conditionally; declare them so rustc's
+    // unexpected_cfgs check recognizes them on every build.
+    println!("cargo:rustc-check-cfg=cfg(ossl111)");
+    println!("cargo:rustc-check-cfg=cfg(ossl300)");
 }

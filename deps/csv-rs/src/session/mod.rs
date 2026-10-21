@@ -205,8 +205,8 @@ impl Session<Initialized> {
     /// Verifies the HYGON SP's measurement.
     pub fn verify(
         self,
-        digest: &[u8],
-        build: Build,
+        _digest: &[u8],
+        _build: Build,
         msr: api::launch::Measurement,
     ) -> Result<Session<Verified>> {
         //TODO: open it after drgonball support
