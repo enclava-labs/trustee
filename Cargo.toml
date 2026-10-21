@@ -21,7 +21,16 @@ documentation = "https://github.com/confidential-containers/kbs"
 edition = "2021"
 
 [workspace.dependencies]
-actix-web = "4"
+actix-web = { version = "4", default-features = false, features = [
+    "macros",
+    "compress-brotli",
+    "compress-gzip",
+    "compress-zstd",
+    "cookies",
+    "unicode",
+    "compat",
+    "ws",
+] }
 actix-web-httpauth = "0.8.2"
 anyhow = "1.0"
 assert-json-diff = "2.0.2"
@@ -78,4 +87,12 @@ tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 uuid = { version = "1.23.0", features = ["v4"] }
 
 [patch.crates-io]
+# git2 >=0.21 (RUSTSEC-2026-0183/0184): vendored 1.7.1 with the upstream dependabot
+# bump (baoyachi/shadow-rs#dependabot/cargo/git2-0.21.0, unreleased upstream).
+shadow-rs = { path = "deps/shadow-rs" }
 sev = { git = "https://github.com/virtee/sev", rev = "d487809188c3c92e397bc92e2cb2a85eb982c980" }
+
+# h2 0.3.x elimination (RUSTSEC-2026-0258): vendored at pinned rev b67a07e; drops
+# unused hyper 0.14/hyper-tls and bumps reqwest 0.11 -> 0.12 (hyper 1 / h2 0.4).
+[patch."https://github.com/openanolis/csv-rs"]
+csv-rs = { path = "deps/csv-rs" }
