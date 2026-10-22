@@ -259,8 +259,12 @@ impl EarAttestationTokenBroker {
             // Shipped-default authority holds at EVALUATION time too (Devin
             // review on #17, round 3): a policy mutated in storage after
             // construction is restored here, and a failed restore fails the
-            // appraisal — never sign with unverified rules.
-            Self::ensure_shipped_policies_authoritative(&self.policy_engine).await?;
+            // appraisal — never sign with unverified rules. Deployments that
+            // legitimately reconfigure appraisal under a shipped id (e.g.
+            // test harnesses) opt out via `lock_shipped_default_policies`.
+            if self.config.lock_shipped_default_policies {
+                Self::ensure_shipped_policies_authoritative(&self.policy_engine).await?;
+            }
             let policy_results = self
                 .policy_engine
                 .evaluate_rego(
@@ -891,6 +895,18 @@ mod tests {
             "a stale policy on read-only storage must fail startup, never be silently \
              served (Devin review on #17)"
         );
+    }
+
+    #[test]
+    fn test_shipped_policy_locking_defaults_to_fail_closed() {
+        // The evaluation-time authority gate is config-driven and FAILS
+        // CLOSED by default: deployments that legitimately reconfigure
+        // appraisal under a shipped id (the upstream KBS integration
+        // harness shape) must explicitly opt out.
+        assert!(EarTokenConfiguration::default().lock_shipped_default_policies);
+        let unlocked: EarTokenConfiguration =
+            serde_json::from_str(r#"{"lock_shipped_default_policies": false}"#).unwrap();
+        assert!(!unlocked.lock_shipped_default_policies);
     }
 
     #[tokio::test]

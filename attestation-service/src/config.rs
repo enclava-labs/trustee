@@ -97,6 +97,7 @@ mod tests {
             build_name: "0.1.0".into(),
             profile_name: "tag:github.com,2024:confidential-containers/Trustee".into(),
             verbose_token: true,
+            lock_shipped_default_policies: true,
         },
         verifier_config: None,
         storage_backend: StorageBackendConfig {
@@ -119,6 +120,7 @@ mod tests {
             build_name: "0.1.0".into(),
             profile_name: "tag:github.com,2024:confidential-containers/Trustee".into(),
             verbose_token: true,
+            lock_shipped_default_policies: true,
             signer: Some(TokenSignerConfig {
                 key_path: "/etc/key".into(),
                 cert_url: Some("https://example.io".into()),
