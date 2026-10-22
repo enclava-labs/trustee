@@ -57,32 +57,32 @@ impl EarAttestationTokenBroker {
 
         let default_cpu_policy = include_str!("ear_default_policy_cpu.rego");
 
+        let default_gpu_policy = include_str!("ear_default_policy_gpu.rego");
+        let default_switch_policy = include_str!("ear_default_policy_switch.rego");
+        let default_ppcie_policy = include_str!("ear_default_policy_ppcie.rego");
+
         // The shipped defaults are compile-time content and authoritative:
         // overwrite must be true or a persisted copy from a previous version
         // (registration disabled overwrite) survives the upgrade and bypasses
         // any newly added rejection branches. Custom policy ids registered
         // through the API keep their own names and are unaffected.
-        policy_engine
-            .set_policy("default_cpu", default_cpu_policy, true)
-            .await?;
-
-        let default_gpu_policy = include_str!("ear_default_policy_gpu.rego");
-
-        policy_engine
-            .set_policy("default_gpu", default_gpu_policy, true)
-            .await?;
-
-        let default_switch_policy = include_str!("ear_default_policy_switch.rego");
-
-        policy_engine
-            .set_policy("default_switch", default_switch_policy, true)
-            .await?;
-
-        let default_ppcie_policy = include_str!("ear_default_policy_ppcie.rego");
-
-        policy_engine
-            .set_policy("default_ppcie", default_ppcie_policy, true)
-            .await?;
+        //
+        // Registration is read-compare-write (Devin review on #17): an
+        // IDENTICAL preloaded copy needs no write, so a deployment with its
+        // policy store preloaded read-only starts cleanly. A differing copy is
+        // still overwritten — and on read-only storage that write FAILS
+        // startup: never silently serve a stale policy.
+        for (policy_id, policy) in [
+            ("default_cpu", default_cpu_policy),
+            ("default_gpu", default_gpu_policy),
+            ("default_switch", default_switch_policy),
+            ("default_ppcie", default_ppcie_policy),
+        ] {
+            match policy_engine.get_policy(policy_id).await {
+                Ok(existing) if existing == policy => continue,
+                _ => policy_engine.set_policy(policy_id, policy, true).await?,
+            }
+        }
 
         if config.signer.is_none() {
             info!("No Token Signer key in config file, create an ephemeral key and without CA pubkey cert");
@@ -717,5 +717,102 @@ mod tests {
             include_str!("ear_default_policy_cpu.rego"),
             "the shipped default must replace a persisted copy at startup"
         );
+    }
+
+    /// LocalFs policy store preloaded with all four shipped defaults and made
+    /// read-only — the deployment shape Devin's review on #17 describes.
+    async fn read_only_policy_storage(
+        dir: &std::path::Path,
+        stale_cpu: bool,
+    ) -> key_value_storage::KeyValueStorageInstance {
+        use std::os::unix::fs::PermissionsExt;
+        let storage = KeyValueStorageStructConfig {
+            local_fs: Some(key_value_storage::local_fs::Config {
+                dir_path: dir.to_string_lossy().into_owned(),
+            }),
+            ..Default::default()
+        }
+        .to_client_with_namespace(KeyValueStorageType::LocalFs, AS_POLICY_STORAGE_NAMESPACE)
+        .await
+        .unwrap();
+        let shipped = [
+            (
+                "default_cpu.rego",
+                include_str!("ear_default_policy_cpu.rego"),
+            ),
+            (
+                "default_gpu.rego",
+                include_str!("ear_default_policy_gpu.rego"),
+            ),
+            (
+                "default_switch.rego",
+                include_str!("ear_default_policy_switch.rego"),
+            ),
+            (
+                "default_ppcie.rego",
+                include_str!("ear_default_policy_ppcie.rego"),
+            ),
+        ];
+        for (index, (key, policy)) in shipped.iter().enumerate() {
+            let content = if stale_cpu && index == 0 {
+                "# stale pre-upgrade policy"
+            } else {
+                *policy
+            };
+            storage
+                .set(key, content.as_bytes(), SetParameters { overwrite: true })
+                .await
+                .unwrap();
+        }
+        let namespace_dir = dir.join(AS_POLICY_STORAGE_NAMESPACE);
+        for entry in std::fs::read_dir(&namespace_dir).unwrap() {
+            std::fs::set_permissions(
+                entry.unwrap().path(),
+                std::fs::Permissions::from_mode(0o444),
+            )
+            .unwrap();
+        }
+        std::fs::set_permissions(&namespace_dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        storage
+    }
+
+    fn restore_for_cleanup(dir: &std::path::Path) {
+        use std::os::unix::fs::PermissionsExt;
+        let namespace_dir = dir.join(AS_POLICY_STORAGE_NAMESPACE);
+        for entry in std::fs::read_dir(&namespace_dir).unwrap() {
+            std::fs::set_permissions(
+                entry.unwrap().path(),
+                std::fs::Permissions::from_mode(0o644),
+            )
+            .unwrap();
+        }
+        std::fs::set_permissions(&namespace_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_shipped_default_policy_identical_preload_needs_no_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = read_only_policy_storage(dir.path(), false).await;
+        EarAttestationTokenBroker::new(EarTokenConfiguration::default(), storage)
+            .await
+            .expect(
+                "an identical read-only preload must start cleanly — registration must not \
+                 rewrite identical content (Devin review on #17)",
+            );
+        restore_for_cleanup(dir.path());
+    }
+
+    #[tokio::test]
+    async fn test_shipped_default_policy_stale_preload_on_read_only_storage_fails_startup() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = read_only_policy_storage(dir.path(), true).await;
+        let result =
+            EarAttestationTokenBroker::new(EarTokenConfiguration::default(), storage).await;
+        assert!(
+            result.is_err(),
+            "a stale policy on read-only storage must fail startup, never be silently served \
+             (Devin review on #17)"
+        );
+        restore_for_cleanup(dir.path());
     }
 }
