@@ -53,7 +53,6 @@ policy-engine.path = "../deps/policy-engine"
 prost = { workspace = true, optional = true }
 reference-value-provider-service.path = "../rvps"
 regorus.workspace = true
-rsa.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_variant = "0.1.2"
