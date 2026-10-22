@@ -57,26 +57,31 @@ impl EarAttestationTokenBroker {
 
         let default_cpu_policy = include_str!("ear_default_policy_cpu.rego");
 
+        // The shipped defaults are compile-time content and authoritative:
+        // overwrite must be true or a persisted copy from a previous version
+        // (registration disabled overwrite) survives the upgrade and bypasses
+        // any newly added rejection branches. Custom policy ids registered
+        // through the API keep their own names and are unaffected.
         policy_engine
-            .set_policy("default_cpu", default_cpu_policy, false)
+            .set_policy("default_cpu", default_cpu_policy, true)
             .await?;
 
         let default_gpu_policy = include_str!("ear_default_policy_gpu.rego");
 
         policy_engine
-            .set_policy("default_gpu", default_gpu_policy, false)
+            .set_policy("default_gpu", default_gpu_policy, true)
             .await?;
 
         let default_switch_policy = include_str!("ear_default_policy_switch.rego");
 
         policy_engine
-            .set_policy("default_switch", default_switch_policy, false)
+            .set_policy("default_switch", default_switch_policy, true)
             .await?;
 
         let default_ppcie_policy = include_str!("ear_default_policy_ppcie.rego");
 
         policy_engine
-            .set_policy("default_ppcie", default_ppcie_policy, false)
+            .set_policy("default_ppcie", default_ppcie_policy, true)
             .await?;
 
         if config.signer.is_none() {
@@ -685,5 +690,32 @@ mod tests {
         });
 
         assert_json_eq!(expected_claims, transformed_claims);
+    }
+
+    #[tokio::test]
+    async fn test_shipped_default_policy_overwrites_persisted_stale_copy() {
+        let config = EarTokenConfiguration::default();
+        let storage = KeyValueStorageStructConfig::default()
+            .to_client_with_namespace(KeyValueStorageType::Memory, AS_POLICY_STORAGE_NAMESPACE)
+            .await
+            .unwrap();
+        // Simulate an upgraded deployment whose persistent policy storage
+        // still carries the pre-upgrade default under the shipped name.
+        storage
+            .set(
+                "default_cpu.rego",
+                b"# stale pre-upgrade policy",
+                SetParameters { overwrite: true },
+            )
+            .await
+            .unwrap();
+        let broker = EarAttestationTokenBroker::new(config, storage)
+            .await
+            .unwrap();
+        assert_eq!(
+            broker.get_policy("default_cpu".to_string()).await.unwrap(),
+            include_str!("ear_default_policy_cpu.rego"),
+            "the shipped default must replace a persisted copy at startup"
+        );
     }
 }
