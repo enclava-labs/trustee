@@ -36,7 +36,7 @@ RUN if [ "$(uname -m)" != "${ARCH}" ]; then \
     cargo install --path attestation-service --bin grpc-as --no-default-features --features grpc-bin,rvps-grpc,${VERIFIER} --locked ${TARGET_FLAG}
 
 # ubuntu:24.04
-FROM ubuntu@sha256:7c06e91f61fa88c08cc74f7e1b7c69ae24910d745357e0dfe1d2c0322aaf20f9
+FROM ubuntu@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac
 ARG ARCH=x86_64
 ARG VERIFIER=all-verifier
 

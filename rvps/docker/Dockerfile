@@ -2,7 +2,10 @@
 # Licensed under the Apache License, Version 2.0, see LICENSE for details.
 # SPDX-License-Identifier: Apache-2.0
 
-FROM --platform=${BUILDPLATFORM:-linux/amd64} docker.io/library/rust:latest AS builder
+# rust:1.90.0
+FROM --platform=${BUILDPLATFORM:-linux/amd64} \
+    docker.io/library/rust@sha256:e227f20ec42af3ea9a3c9c1dd1b2012aa15f12279b5e9d5fb890ca1c2bb5726c \
+    AS builder
 ARG ARCH=x86_64
 
 WORKDIR /usr/src/rvps
@@ -22,7 +25,8 @@ RUN if [ "$(uname -m)" != "${ARCH}" ]; then \
     rustup target add ${RUSTC_TARGET}; fi; \
     cargo install --bin rvps --path rvps ${TARGET_FLAG} --locked
 
-FROM debian
+# debian:trixie-slim
+FROM docker.io/library/debian@sha256:62bd423aeee912639ca8ee681c2b762cb3e25137e0a92b20be455898a9f034ad
 
 LABEL org.opencontainers.image.source="https://github.com/confidential-containers/trustee/rvps"
 
