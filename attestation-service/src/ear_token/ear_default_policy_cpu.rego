@@ -99,11 +99,7 @@ configuration := 2 if {
 }
 
 ##### SNP
-# Fail closed. The reference value is the allowlist, so a measurement that is
-# not on it must not degrade to the default (33, "unrecognized" — a warning
-# tier): the KBS resource policy only enforces ear.status, and a warning would
-# still release the key. A missing reference value comes back as null and
-# matches nothing, which fails closed the same way.
+# A measurement allowlist miss must be contraindicated rather than a warning.
 executables := 3 if {
 	input.snp
 
@@ -124,18 +120,10 @@ hardware := 2 if {
 	input.snp.reported_tcb_tee in query_reference_value("snp_tee_svn")
 }
 
-else := 97 if {
-	input.snp
-}
-
 # For the 'configuration' trust claim 2 stands for
 # "The configuration is a known and approved config."
 #
 # For this, we compare all the configuration fields.
-# Same fail-closed reasoning as executables and hardware above: an SNP guest
-# whose debug bit, migration bit or platform config is not the approved one
-# must come out contraindicated, not as the "configuration unavailable"
-# warning the default would give.
 configuration := 2 if {
 	input.snp
 
@@ -147,10 +135,6 @@ configuration := 2 if {
 	input.snp.policy_abi_minor == query_reference_value("snp_guest_abi_minor")
 	input.snp.policy_single_socket == query_reference_value("snp_single_socket")
 	input.snp.policy_smt_allowed == query_reference_value("snp_smt_allowed")
-}
-
-else := 96 if {
-	input.snp
 }
 
 # For the `configuration` trust claim 3 stands for
@@ -165,6 +149,10 @@ else := 3 if {
 
 	input.snp.policy_debug_allowed == false
 	input.snp.policy_migrate_ma == false
+}
+
+else := 96 if {
+	input.snp
 }
 
 ##### TDX

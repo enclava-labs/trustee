@@ -637,6 +637,162 @@ mod tests {
         ear.validate().unwrap();
     }
 
+    #[rstest::rstest]
+    #[case::safe_fallback(json!({}), json!({}), ear::TrustTier::Affirming, 3)]
+    #[case::approved_configuration(
+        json!({}),
+        json!({
+            "snp_smt_enabled": true,
+            "snp_tsme_enabled": false,
+            "snp_guest_abi_major": 1,
+            "snp_guest_abi_minor": 0,
+            "snp_single_socket": false,
+            "snp_smt_allowed": true
+        }),
+        ear::TrustTier::Affirming,
+        2
+    )]
+    #[case::configuration_mismatch_falls_back(
+        json!({}),
+        json!({"snp_smt_enabled": false}),
+        ear::TrustTier::Affirming,
+        3
+    )]
+    #[case::unapproved_measurement(
+        json!({"measurement": "ff".repeat(48)}),
+        json!({}),
+        ear::TrustTier::Contraindicated,
+        3
+    )]
+    #[case::unapproved_tcb(
+        json!({"reported_tcb_microcode": 255}),
+        json!({}),
+        ear::TrustTier::Contraindicated,
+        3
+    )]
+    #[case::missing_measurement_allowlist(
+        json!({}),
+        json!({"snp_launch_measurement": null}),
+        ear::TrustTier::Contraindicated,
+        3
+    )]
+    #[case::missing_tcb_allowlist(
+        json!({}),
+        json!({"snp_microcode": null}),
+        ear::TrustTier::Contraindicated,
+        3
+    )]
+    #[case::debug_allowed(
+        json!({"policy_debug_allowed": true}),
+        json!({}),
+        ear::TrustTier::Contraindicated,
+        96
+    )]
+    #[case::migration_allowed(
+        json!({"policy_migrate_ma": true}),
+        json!({}),
+        ear::TrustTier::Contraindicated,
+        96
+    )]
+    #[case::missing_debug_claim(
+        json!({"policy_debug_allowed": null}),
+        json!({}),
+        ear::TrustTier::Contraindicated,
+        96
+    )]
+    #[case::missing_migration_claim(
+        json!({"policy_migrate_ma": null}),
+        json!({}),
+        ear::TrustTier::Contraindicated,
+        96
+    )]
+    #[tokio::test]
+    async fn test_issue_snp_configuration_fallback(
+        #[case] claim_overrides: Value,
+        #[case] reference_overrides: Value,
+        #[case] expected_status: ear::TrustTier,
+        #[case] expected_configuration: i8,
+    ) {
+        use crate::rvps::{builtin::BuiltinRvps, RvpsApi};
+
+        let mut claims = json!({
+            "measurement": "aa".repeat(48),
+            "reported_tcb_bootloader": 10,
+            "reported_tcb_microcode": 84,
+            "reported_tcb_snp": 24,
+            "reported_tcb_tee": 0,
+            "policy_debug_allowed": false,
+            "policy_migrate_ma": false,
+            "platform_smt_enabled": true,
+            "platform_tsme_enabled": false,
+            "policy_abi_major": 1,
+            "policy_abi_minor": 0,
+            "policy_single_socket": false,
+            "policy_smt_allowed": true
+        });
+        let mut references = json!({
+            "snp_launch_measurement": ["aa".repeat(48)],
+            "snp_bootloader": [10],
+            "snp_microcode": [84],
+            "snp_snp_svn": [24],
+            "snp_tee_svn": [0]
+        });
+        for (values, overrides) in [
+            (&mut claims, claim_overrides),
+            (&mut references, reference_overrides),
+        ] {
+            for (key, value) in overrides.as_object().unwrap() {
+                if value.is_null() {
+                    values.as_object_mut().unwrap().remove(key);
+                } else {
+                    values[key] = value.clone();
+                }
+            }
+        }
+        let storage_config = KeyValueStorageStructConfig::default();
+        let mut rvps = BuiltinRvps::new(None, KeyValueStorageType::Memory, &storage_config)
+            .await
+            .unwrap();
+        let registration = json!({
+            "type": "sample",
+            "payload": base64::engine::general_purpose::STANDARD.encode(references.to_string())
+        });
+        rvps.verify_and_extract(&registration.to_string())
+            .await
+            .unwrap();
+        let storage = storage_config
+            .to_client_with_namespace(KeyValueStorageType::Memory, AS_POLICY_STORAGE_NAMESPACE)
+            .await
+            .unwrap();
+        let broker = EarAttestationTokenBroker::new(EarTokenConfiguration::default(), storage)
+            .await
+            .unwrap();
+        let token = broker
+            .issue(
+                vec![TeeClaims {
+                    tee: Tee::Snp,
+                    tee_class: "cpu".into(),
+                    claims,
+                    init_data_claims: json!({}),
+                    runtime_data_claims: json!({}),
+                }],
+                vec!["default".into()],
+                Some(std::sync::Arc::new(tokio::sync::Mutex::new(rvps))),
+            )
+            .await
+            .unwrap();
+        let public_key = broker.private_key.public_key_to_pem().unwrap();
+        let public_key = DecodingKey::from_ec_pem(&public_key).unwrap();
+        let ear = Ear::from_jwt(&token, jsonwebtoken::Algorithm::ES256, &public_key).unwrap();
+        ear.validate().unwrap();
+        let cpu = &ear.submods["cpu0"];
+        assert_eq!(cpu.status, expected_status);
+        assert_eq!(
+            cpu.trust_vector.configuration.value(),
+            expected_configuration
+        );
+    }
+
     #[test]
     fn test_transform_claims() {
         let json = json!({
