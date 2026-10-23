@@ -69,6 +69,23 @@ pub struct EarTokenConfiguration {
     /// Default: True
     #[serde(default = "default_verbose_token")]
     pub verbose_token: bool,
+
+    /// Whether the shipped `default_*` appraisal policies remain
+    /// compile-time authoritative for the lifetime of the process (not just
+    /// at startup). When true (the default — fail closed), a policy mutated
+    /// in storage under a shipped id after startup is restored to the
+    /// shipped bytes before the next appraisal, and a failed restore fails
+    /// the appraisal instead of signing with diverged rules. Deployments
+    /// that legitimately reconfigure appraisal through the policy API under
+    /// a shipped id (e.g. test harnesses) can set this to false.
+    /// Default: True
+    #[serde(default = "default_lock_shipped_default_policies")]
+    pub lock_shipped_default_policies: bool,
+}
+
+#[inline]
+fn default_lock_shipped_default_policies() -> bool {
+    true
 }
 
 #[inline]
@@ -86,6 +103,7 @@ impl Default for EarTokenConfiguration {
             profile_name: DEFAULT_PROFILE.to_string(),
             signer: None,
             verbose_token: default_verbose_token(),
+            lock_shipped_default_policies: default_lock_shipped_default_policies(),
         }
     }
 }

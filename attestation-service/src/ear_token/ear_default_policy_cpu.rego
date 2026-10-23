@@ -99,11 +99,15 @@ configuration := 2 if {
 }
 
 ##### SNP
+# A measurement allowlist miss must be contraindicated rather than a warning.
 executables := 3 if {
 	input.snp
 
-	# In the future, we might calculate this measurement here various components
 	input.snp.measurement in query_reference_value("snp_launch_measurement")
+}
+
+else := 97 if {
+	input.snp
 }
 
 hardware := 2 if {
@@ -145,6 +149,10 @@ else := 3 if {
 
 	input.snp.policy_debug_allowed == false
 	input.snp.policy_migrate_ma == false
+}
+
+else := 96 if {
+	input.snp
 }
 
 ##### TDX

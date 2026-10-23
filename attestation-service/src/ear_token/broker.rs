@@ -46,6 +46,45 @@ pub struct EarAttestationTokenBroker {
 }
 
 impl EarAttestationTokenBroker {
+    /// Re-assert that the shipped `default_*` policies still hold the
+    /// compile-time bytes (Devin review on #17, round 3): a policy mutated in
+    /// storage AFTER construction — e.g. through the policy API — would
+    /// otherwise be served to `evaluate_rego` as-is, and the broker could
+    /// sign appraisals with unverified rules. Identical copies are left
+    /// untouched (no write); a diverged copy is restored; if the restore
+    /// fails (e.g. read-only storage) the caller fails closed instead of
+    /// appraising with diverged content. Custom policy ids are unaffected.
+    async fn ensure_shipped_policies_authoritative(
+        policy_engine: &PolicyEngine<Regorus>,
+    ) -> Result<()> {
+        for (policy_id, policy) in [
+            ("default_cpu", include_str!("ear_default_policy_cpu.rego")),
+            ("default_gpu", include_str!("ear_default_policy_gpu.rego")),
+            (
+                "default_switch",
+                include_str!("ear_default_policy_switch.rego"),
+            ),
+            (
+                "default_ppcie",
+                include_str!("ear_default_policy_ppcie.rego"),
+            ),
+        ] {
+            match policy_engine.get_policy(policy_id).await {
+                Ok(existing) if existing == policy => continue,
+                _ => {
+                    warn!(
+                        policy_id,
+                        "stored policy diverged from the shipped default — restoring the \
+                         shipped content (shipped ids are compile-time authoritative; register \
+                         custom policies under their own ids)"
+                    );
+                    policy_engine.set_policy(policy_id, policy, true).await?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub async fn new(
         config: EarTokenConfiguration,
         storage: KeyValueStorageInstance,
@@ -55,29 +94,18 @@ impl EarAttestationTokenBroker {
 
         let policy_engine = PolicyEngine::<Regorus>::new(storage);
 
-        let default_cpu_policy = include_str!("ear_default_policy_cpu.rego");
-
-        policy_engine
-            .set_policy("default_cpu", default_cpu_policy, false)
-            .await?;
-
-        let default_gpu_policy = include_str!("ear_default_policy_gpu.rego");
-
-        policy_engine
-            .set_policy("default_gpu", default_gpu_policy, false)
-            .await?;
-
-        let default_switch_policy = include_str!("ear_default_policy_switch.rego");
-
-        policy_engine
-            .set_policy("default_switch", default_switch_policy, false)
-            .await?;
-
-        let default_ppcie_policy = include_str!("ear_default_policy_ppcie.rego");
-
-        policy_engine
-            .set_policy("default_ppcie", default_ppcie_policy, false)
-            .await?;
+        // The shipped defaults are compile-time content and authoritative at
+        // STARTUP: overwrite must be true or a persisted copy from a previous
+        // version (registration disabled overwrite) survives the upgrade and
+        // bypasses any newly added rejection branches. Custom policy ids
+        // registered through the API keep their own names and are unaffected.
+        //
+        // Registration is read-compare-write (Devin review on #17): an
+        // IDENTICAL preloaded copy needs no write, so a deployment with its
+        // policy store preloaded read-only starts cleanly. A differing copy is
+        // still overwritten — and on read-only storage that write FAILS
+        // startup: never silently serve a stale policy.
+        Self::ensure_shipped_policies_authoritative(&policy_engine).await?;
 
         if config.signer.is_none() {
             info!("No Token Signer key in config file, create an ephemeral key and without CA pubkey cert");
@@ -228,6 +256,15 @@ impl EarAttestationTokenBroker {
                 extensions.push(extension);
             }
 
+            // Shipped-default authority holds at EVALUATION time too (Devin
+            // review on #17, round 3): a policy mutated in storage after
+            // construction is restored here, and a failed restore fails the
+            // appraisal — never sign with unverified rules. Deployments that
+            // legitimately reconfigure appraisal under a shipped id (e.g.
+            // test harnesses) opt out via `lock_shipped_default_policies`.
+            if self.config.lock_shipped_default_policies {
+                Self::ensure_shipped_policies_authoritative(&self.policy_engine).await?;
+            }
             let policy_results = self
                 .policy_engine
                 .evaluate_rego(
@@ -600,6 +637,162 @@ mod tests {
         ear.validate().unwrap();
     }
 
+    #[rstest::rstest]
+    #[case::safe_fallback(json!({}), json!({}), ear::TrustTier::Affirming, 3)]
+    #[case::approved_configuration(
+        json!({}),
+        json!({
+            "snp_smt_enabled": true,
+            "snp_tsme_enabled": false,
+            "snp_guest_abi_major": 1,
+            "snp_guest_abi_minor": 0,
+            "snp_single_socket": false,
+            "snp_smt_allowed": true
+        }),
+        ear::TrustTier::Affirming,
+        2
+    )]
+    #[case::configuration_mismatch_falls_back(
+        json!({}),
+        json!({"snp_smt_enabled": false}),
+        ear::TrustTier::Affirming,
+        3
+    )]
+    #[case::unapproved_measurement(
+        json!({"measurement": "ff".repeat(48)}),
+        json!({}),
+        ear::TrustTier::Contraindicated,
+        3
+    )]
+    #[case::unapproved_tcb(
+        json!({"reported_tcb_microcode": 255}),
+        json!({}),
+        ear::TrustTier::Contraindicated,
+        3
+    )]
+    #[case::missing_measurement_allowlist(
+        json!({}),
+        json!({"snp_launch_measurement": null}),
+        ear::TrustTier::Contraindicated,
+        3
+    )]
+    #[case::missing_tcb_allowlist(
+        json!({}),
+        json!({"snp_microcode": null}),
+        ear::TrustTier::Contraindicated,
+        3
+    )]
+    #[case::debug_allowed(
+        json!({"policy_debug_allowed": true}),
+        json!({}),
+        ear::TrustTier::Contraindicated,
+        96
+    )]
+    #[case::migration_allowed(
+        json!({"policy_migrate_ma": true}),
+        json!({}),
+        ear::TrustTier::Contraindicated,
+        96
+    )]
+    #[case::missing_debug_claim(
+        json!({"policy_debug_allowed": null}),
+        json!({}),
+        ear::TrustTier::Contraindicated,
+        96
+    )]
+    #[case::missing_migration_claim(
+        json!({"policy_migrate_ma": null}),
+        json!({}),
+        ear::TrustTier::Contraindicated,
+        96
+    )]
+    #[tokio::test]
+    async fn test_issue_snp_configuration_fallback(
+        #[case] claim_overrides: Value,
+        #[case] reference_overrides: Value,
+        #[case] expected_status: ear::TrustTier,
+        #[case] expected_configuration: i8,
+    ) {
+        use crate::rvps::{builtin::BuiltinRvps, RvpsApi};
+
+        let mut claims = json!({
+            "measurement": "aa".repeat(48),
+            "reported_tcb_bootloader": 10,
+            "reported_tcb_microcode": 84,
+            "reported_tcb_snp": 24,
+            "reported_tcb_tee": 0,
+            "policy_debug_allowed": false,
+            "policy_migrate_ma": false,
+            "platform_smt_enabled": true,
+            "platform_tsme_enabled": false,
+            "policy_abi_major": 1,
+            "policy_abi_minor": 0,
+            "policy_single_socket": false,
+            "policy_smt_allowed": true
+        });
+        let mut references = json!({
+            "snp_launch_measurement": ["aa".repeat(48)],
+            "snp_bootloader": [10],
+            "snp_microcode": [84],
+            "snp_snp_svn": [24],
+            "snp_tee_svn": [0]
+        });
+        for (values, overrides) in [
+            (&mut claims, claim_overrides),
+            (&mut references, reference_overrides),
+        ] {
+            for (key, value) in overrides.as_object().unwrap() {
+                if value.is_null() {
+                    values.as_object_mut().unwrap().remove(key);
+                } else {
+                    values[key] = value.clone();
+                }
+            }
+        }
+        let storage_config = KeyValueStorageStructConfig::default();
+        let mut rvps = BuiltinRvps::new(None, KeyValueStorageType::Memory, &storage_config)
+            .await
+            .unwrap();
+        let registration = json!({
+            "type": "sample",
+            "payload": base64::engine::general_purpose::STANDARD.encode(references.to_string())
+        });
+        rvps.verify_and_extract(&registration.to_string())
+            .await
+            .unwrap();
+        let storage = storage_config
+            .to_client_with_namespace(KeyValueStorageType::Memory, AS_POLICY_STORAGE_NAMESPACE)
+            .await
+            .unwrap();
+        let broker = EarAttestationTokenBroker::new(EarTokenConfiguration::default(), storage)
+            .await
+            .unwrap();
+        let token = broker
+            .issue(
+                vec![TeeClaims {
+                    tee: Tee::Snp,
+                    tee_class: "cpu".into(),
+                    claims,
+                    init_data_claims: json!({}),
+                    runtime_data_claims: json!({}),
+                }],
+                vec!["default".into()],
+                Some(std::sync::Arc::new(tokio::sync::Mutex::new(rvps))),
+            )
+            .await
+            .unwrap();
+        let public_key = broker.private_key.public_key_to_pem().unwrap();
+        let public_key = DecodingKey::from_ec_pem(&public_key).unwrap();
+        let ear = Ear::from_jwt(&token, jsonwebtoken::Algorithm::ES256, &public_key).unwrap();
+        ear.validate().unwrap();
+        let cpu = &ear.submods["cpu0"];
+        assert_eq!(cpu.status, expected_status);
+        assert_eq!(
+            cpu.trust_vector.configuration.value(),
+            expected_configuration
+        );
+    }
+
     #[test]
     fn test_transform_claims() {
         let json = json!({
@@ -685,5 +878,227 @@ mod tests {
         });
 
         assert_json_eq!(expected_claims, transformed_claims);
+    }
+
+    #[tokio::test]
+    async fn test_shipped_default_policy_overwrites_persisted_stale_copy() {
+        let config = EarTokenConfiguration::default();
+        let storage = KeyValueStorageStructConfig::default()
+            .to_client_with_namespace(KeyValueStorageType::Memory, AS_POLICY_STORAGE_NAMESPACE)
+            .await
+            .unwrap();
+        // Simulate an upgraded deployment whose persistent policy storage
+        // still carries the pre-upgrade default under the shipped name.
+        storage
+            .set(
+                "default_cpu.rego",
+                b"# stale pre-upgrade policy",
+                SetParameters { overwrite: true },
+            )
+            .await
+            .unwrap();
+        let broker = EarAttestationTokenBroker::new(config, storage)
+            .await
+            .unwrap();
+        assert_eq!(
+            broker.get_policy("default_cpu".to_string()).await.unwrap(),
+            include_str!("ear_default_policy_cpu.rego"),
+            "the shipped default must replace a persisted copy at startup"
+        );
+    }
+
+    /// A storage double whose writes always fail, counting every attempted
+    /// `set` — root-proof replacement for the chmod'd LocalFs repro (Devin
+    /// review on #17: mode bits do not stop root): what matters to the broker
+    /// contract is that no write is ATTEMPTED for identical content and that
+    /// a needed write's failure fails startup.
+    struct FailingWritesStorage {
+        inner: key_value_storage::memory::MemoryKeyValueStorage,
+        set_attempts: std::sync::atomic::AtomicUsize,
+    }
+
+    impl FailingWritesStorage {
+        async fn preloaded(shipped: bool) -> Self {
+            use key_value_storage::KeyValueStorage as _;
+            let inner = key_value_storage::memory::MemoryKeyValueStorage::default();
+            let shipped_policies = [
+                (
+                    "default_cpu.rego",
+                    include_str!("ear_default_policy_cpu.rego"),
+                ),
+                (
+                    "default_gpu.rego",
+                    include_str!("ear_default_policy_gpu.rego"),
+                ),
+                (
+                    "default_switch.rego",
+                    include_str!("ear_default_policy_switch.rego"),
+                ),
+                (
+                    "default_ppcie.rego",
+                    include_str!("ear_default_policy_ppcie.rego"),
+                ),
+            ];
+            for (index, (key, policy)) in shipped_policies.iter().enumerate() {
+                let content = if shipped || index != 0 {
+                    (*policy).to_string()
+                } else {
+                    "# stale pre-upgrade policy".to_string()
+                };
+                inner
+                    .set(key, content.as_bytes(), SetParameters { overwrite: true })
+                    .await
+                    .unwrap();
+            }
+            Self {
+                inner,
+                set_attempts: std::sync::atomic::AtomicUsize::new(0),
+            }
+        }
+
+        fn set_attempts(&self) -> usize {
+            self.set_attempts.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl key_value_storage::KeyValueStorage for FailingWritesStorage {
+        async fn set(
+            &self,
+            key: &str,
+            _value: &[u8],
+            _parameters: SetParameters,
+        ) -> std::result::Result<
+            key_value_storage::SetResult,
+            key_value_storage::KeyValueStorageError,
+        > {
+            self.set_attempts
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            // Report what a read-only backend reports: the write is refused.
+            Err(key_value_storage::KeyValueStorageError::SetKeyFailed {
+                source: anyhow::anyhow!("simulated read-only store"),
+                key: key.to_string(),
+            })
+        }
+
+        async fn update_if_present(
+            &self,
+            key: &str,
+            value: &[u8],
+        ) -> std::result::Result<
+            key_value_storage::UpdateResult,
+            key_value_storage::KeyValueStorageError,
+        > {
+            self.inner.update_if_present(key, value).await
+        }
+
+        async fn list(
+            &self,
+        ) -> std::result::Result<Vec<String>, key_value_storage::KeyValueStorageError> {
+            self.inner.list().await
+        }
+
+        async fn get(
+            &self,
+            key: &str,
+        ) -> std::result::Result<Option<Vec<u8>>, key_value_storage::KeyValueStorageError> {
+            self.inner.get(key).await
+        }
+
+        async fn delete(
+            &self,
+            key: &str,
+        ) -> std::result::Result<Option<Vec<u8>>, key_value_storage::KeyValueStorageError> {
+            self.inner.delete(key).await
+        }
+
+        async fn delete_if_present(
+            &self,
+            key: &str,
+        ) -> std::result::Result<
+            key_value_storage::DeleteResult,
+            key_value_storage::KeyValueStorageError,
+        > {
+            self.inner.delete_if_present(key).await
+        }
+    }
+
+    #[tokio::test]
+    async fn test_shipped_default_policy_identical_preload_needs_no_write() {
+        let storage = std::sync::Arc::new(FailingWritesStorage::preloaded(true).await);
+        EarAttestationTokenBroker::new(EarTokenConfiguration::default(), storage.clone())
+            .await
+            .expect(
+                "an identical read-only preload must start cleanly — registration must not \
+                 rewrite identical content (Devin review on #17)",
+            );
+        assert_eq!(
+            storage.set_attempts(),
+            0,
+            "no write may be attempted for identical preloaded content"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_shipped_default_policy_stale_preload_on_read_only_storage_fails_startup() {
+        let result = EarAttestationTokenBroker::new(
+            EarTokenConfiguration::default(),
+            std::sync::Arc::new(FailingWritesStorage::preloaded(false).await),
+        )
+        .await;
+        assert!(
+            result.is_err(),
+            "a stale policy on read-only storage must fail startup, never be silently \
+             served (Devin review on #17)"
+        );
+    }
+
+    #[test]
+    fn test_shipped_policy_locking_defaults_to_fail_closed() {
+        // The evaluation-time authority gate is config-driven and FAILS
+        // CLOSED by default: deployments that legitimately reconfigure
+        // appraisal under a shipped id (the upstream KBS integration
+        // harness shape) must explicitly opt out.
+        assert!(EarTokenConfiguration::default().lock_shipped_default_policies);
+        let unlocked: EarTokenConfiguration =
+            serde_json::from_str(r#"{"lock_shipped_default_policies": false}"#).unwrap();
+        assert!(!unlocked.lock_shipped_default_policies);
+    }
+
+    #[tokio::test]
+    async fn test_diverged_shipped_policy_is_restored_not_evaluated() {
+        // Devin review on #17, round 3: a policy mutated in storage AFTER
+        // construction (e.g. through the policy API) must not be served to
+        // evaluation — the authority re-assert restores the shipped bytes.
+        let storage = KeyValueStorageStructConfig::default()
+            .to_client_with_namespace(KeyValueStorageType::Memory, AS_POLICY_STORAGE_NAMESPACE)
+            .await
+            .unwrap();
+        let broker =
+            EarAttestationTokenBroker::new(EarTokenConfiguration::default(), storage.clone())
+                .await
+                .unwrap();
+        // Simulate the post-construction mutation under a shipped id.
+        broker
+            .set_policy(
+                "default_cpu".to_string(),
+                "# mutated after startup".to_string(),
+            )
+            .await
+            .unwrap();
+        assert_ne!(
+            broker.get_policy("default_cpu".to_string()).await.unwrap(),
+            include_str!("ear_default_policy_cpu.rego"),
+            "fixture: the mutation landed"
+        );
+        EarAttestationTokenBroker::ensure_shipped_policies_authoritative(&broker.policy_engine)
+            .await
+            .unwrap();
+        assert_eq!(
+            broker.get_policy("default_cpu".to_string()).await.unwrap(),
+            include_str!("ear_default_policy_cpu.rego"),
+            "the evaluation-time re-assert must restore the shipped content before any EAR \
+             is appraised with diverged rules"
+        );
     }
 }
