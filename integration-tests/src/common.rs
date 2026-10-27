@@ -144,7 +144,12 @@ impl TestHarness {
 
         tokio::fs::write(auth_pubkey_path.clone(), auth_pubkey.as_bytes()).await?;
 
-        let attestation_token_config = EarTokenConfiguration::default();
+        // The harness reconfigures appraisal under the shipped `default_*`
+        // ids per test (set_attestation_policy), so it opts out of the
+        // evaluation-time shipped-policy lock (which defaults to fail
+        // closed for deployments).
+        let mut attestation_token_config = EarTokenConfiguration::default();
+        attestation_token_config.lock_shipped_default_policies = false;
 
         // Setup RVPS either remotely or builtin
         let rvps_config = match &test_parameters.rvps_type {

@@ -72,6 +72,26 @@ If you upload your own policy, be sure to use this suffix.
 When attesting multiple devices, a policy is required for each device class.
 If you have devices of class `gpu` upload a policy with an id ending in `_gpu` i.e. `default_gpu`.
 
+## Default SNP Appraisal
+
+The default CPU policy requires the SNP launch measurement and reported TCB to
+match their RVPS allowlists. A missing or mismatching measurement or TCB value
+produces a contraindicated appraisal.
+
+For configuration, the policy preserves two affirming outcomes:
+
+* `2`: debug and migration are disabled, and all six platform-configuration
+  reference values match.
+* `3`: debug and migration are disabled, but the full configuration does not
+  match or its reference values are absent.
+
+If either debug or migration is enabled or its claim is missing, configuration
+is `96` (contraindicated). The fallback does not bypass the measurement or TCB
+allowlists. It does not require a full platform-configuration allowlist.
+
+Appraisal alone does not deny secret release: the KBS resource policy must
+require an affirming EAR status.
+
 ## How to Use Policy
 
 For both [gRPC CoCo AS](../../protos/attestation.proto) and [Restful CoCo AS](./restful-as.md), we have a
