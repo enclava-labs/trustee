@@ -439,8 +439,8 @@ impl EarAttestationTokenBroker {
         let algorithm = jwk::AlgorithmParameters::EllipticCurve(jwk::EllipticCurveKeyParameters {
             key_type: jwk::EllipticCurveKeyType::EC,
             curve: jwk::EllipticCurve::P256,
-            x: URL_SAFE_NO_PAD.encode(x.to_vec()),
-            y: URL_SAFE_NO_PAD.encode(y.to_vec()),
+            x: URL_SAFE_NO_PAD.encode(x.to_vec_padded(P256_COORDINATE_LEN)?),
+            y: URL_SAFE_NO_PAD.encode(y.to_vec_padded(P256_COORDINATE_LEN)?),
         });
 
         let jwk = jwk::Jwk { common, algorithm };
@@ -448,6 +448,9 @@ impl EarAttestationTokenBroker {
         Ok(jwk)
     }
 }
+
+/// RFC 7518 §6.2.1.2: EC JWK coordinates must be the full field size, including leading zeros.
+const P256_COORDINATE_LEN: i32 = 32;
 
 fn generate_ec_keys() -> Result<(EcKey<Private>, Vec<u8>, Vec<u8>)> {
     let group = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1)?;
@@ -583,6 +586,58 @@ mod tests {
             )
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_ephemeral_key_with_short_coordinate_verifies_via_header_jwk() {
+        let storage = KeyValueStorageStructConfig::default()
+            .to_client_with_namespace(KeyValueStorageType::Memory, AS_POLICY_STORAGE_NAMESPACE)
+            .await
+            .unwrap();
+        storage
+            .set(
+                "ear_no_rv_policy_cpu.rego",
+                include_bytes!("../../tests/coco-as/policy/opa/ear_no_rv_policy_cpu.rego"),
+                SetParameters { overwrite: true },
+            )
+            .await
+            .unwrap();
+        let mut broker = EarAttestationTokenBroker::new(EarTokenConfiguration::default(), storage)
+            .await
+            .unwrap();
+
+        // ~1/128 of P-256 keys have a coordinate with a leading zero byte.
+        broker.private_key = loop {
+            let key = generate_ec_keys().unwrap().0;
+            let mut ctx = BigNumContext::new().unwrap();
+            let (mut x, mut y) = (BigNum::new().unwrap(), BigNum::new().unwrap());
+            key.public_key()
+                .affine_coordinates_gfp(key.group(), &mut x, &mut y, &mut ctx)
+                .unwrap();
+            if x.num_bytes() < 32 || y.num_bytes() < 32 {
+                break key;
+            }
+        };
+
+        let token = broker
+            .issue(
+                vec![TeeClaims {
+                    tee: Tee::Sample,
+                    tee_class: "cpu".to_string(),
+                    claims: json!({"claim": "claim1"}),
+                    runtime_data_claims: json!({"runtime_data": "111"}),
+                    init_data_claims: json!({"initdata": "111"}),
+                }],
+                vec!["ear_no_rv_policy".into()],
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Same path the KBS takes with `insecure_key`: trust the JWK in the header.
+        let header_jwk = jsonwebtoken::decode_header(&token).unwrap().jwk.unwrap();
+        let public_key = DecodingKey::from_jwk(&header_jwk).unwrap();
+        Ear::from_jwt(&token, jsonwebtoken::Algorithm::ES256, &public_key).unwrap();
     }
 
     #[tokio::test]
