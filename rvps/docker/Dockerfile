@@ -30,6 +30,9 @@ FROM docker.io/library/debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d054
 
 LABEL org.opencontainers.image.source="https://github.com/confidential-containers/trustee/rvps"
 
+# security: pull current trixie security updates (zlib1g CVE-2026-76844 / CVE-2026-85091, deb13u1) at build time
+RUN apt-get update && apt-get -y upgrade && apt-get clean && rm -rf /var/lib/apt/lists/*
+
 COPY --from=builder /usr/local/cargo/bin/rvps /usr/local/bin/rvps
 
 CMD ["rvps"]
