@@ -36,14 +36,14 @@ RUN if [ "$(uname -m)" != "${ARCH}" ]; then \
     cargo install --path attestation-service --bin grpc-as --no-default-features --features grpc-bin,rvps-grpc,${VERIFIER} --locked ${TARGET_FLAG}
 
 # ubuntu:24.04
-FROM ubuntu@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac
+FROM ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852
 ARG ARCH=x86_64
 ARG VERIFIER=all-verifier
 
 LABEL org.opencontainers.image.source="https://github.com/confidential-containers/trustee/tree/main/attestation-service"
 
 # Install Openssl Suites
-RUN apt-get update && apt-get install openssl -y && \
+RUN apt-get update && apt-get -y upgrade && apt-get install openssl -y && \
     apt install --reinstall ca-certificates && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/{apt,dpkg,cache,log} /tmp/* /var/tmp/*
