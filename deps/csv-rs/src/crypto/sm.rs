@@ -12,6 +12,7 @@ use std::{
     io::{Error, ErrorKind, Result},
     ptr,
 };
+use std::ffi::c_int;
 
 #[cfg(ossl111)]
 pub const EVP_PKEY_CTRL_SET1_ID: c_int = EVP_PKEY_ALG_CTRL + 11;
