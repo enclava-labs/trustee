@@ -73,8 +73,20 @@ async fn get_jwks_from_file_or_url(p: &str) -> Result<jwk::JwkSet, JwksGetError>
             Ok(jwkset)
         }
         "file" => {
-            let file = File::open(url.path())
-                .map_err(|e| JwksGetError::AccessFailed(format!("open {}: {}", url.path(), e)))?;
+            // url 2.5.9 percent-encodes '^', '`', '{', '}' and ' ' in
+            // Url::path() (2.5.7 did not), so a literal path read via
+            // url.path() resolves to the encoded filename and the verifier
+            // fails at startup. Url::to_file_path() returns the decoded
+            // filesystem path for file:// URLs and rejects URLs it cannot
+            // represent as one.
+            let path = url.to_file_path().map_err(|()| {
+                JwksGetError::InvalidSourcePath(format!(
+                    "file URL is not a valid filesystem path: {p}"
+                ))
+            })?;
+            let file = File::open(&path).map_err(|e| {
+                JwksGetError::AccessFailed(format!("open {}: {}", path.display(), e))
+            })?;
 
             serde_json::from_reader(BufReader::new(file))
                 .map_err(|e| JwksGetError::DeserializeSource(e.to_string()))
@@ -273,6 +285,17 @@ mod tests {
 
         let p = "file://".to_owned() + jwks_file.to_str().expect("to get path as str");
         let jwtks = get_jwks_from_file_or_url(&p).await.expect("to get jwks");
+
+        // Regression (follow-up to #25): url 2.5.9 percent-encodes '^' in
+        // Url::path(), so a caret-named key file must still resolve through
+        // Url::to_file_path() instead of opening the encoded filename.
+        let caret_file = tmp_dir.path().join("trust^prod.jwks");
+        std::fs::write(&caret_file, json).expect("to write caret-named testdata");
+        let caret_p = "file://".to_owned() + caret_file.to_str().expect("to get path as str");
+        let caret_jwks = get_jwks_from_file_or_url(&caret_p)
+            .await
+            .expect("to read caret-named jwks");
+        assert_eq!(caret_jwks.keys.len(), jwtks.keys.len());
         assert_eq!(jwtks.keys.len(), 1);
         assert_eq!(jwtks.keys[0].common.key_algorithm, Some(alg));
     }
